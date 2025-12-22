@@ -13,7 +13,7 @@ pub enum GenerateError {
 
 pub fn generate(json_input: &str) -> Result<String, GenerateError> {
     let config: Config = serde_json::from_str(json_input)?;
-    let diags = validate(&config);
+    let diags = validate(json_input);
     for diag in diags {
         if diag.severity == Severity::Error {
             return Err(GenerateError::ValidationError);
@@ -84,7 +84,6 @@ pub fn generate(json_input: &str) -> Result<String, GenerateError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, Field};
 
     #[test]
     fn test_generate_basic_packet() {

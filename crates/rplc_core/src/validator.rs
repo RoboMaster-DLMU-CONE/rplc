@@ -1,10 +1,9 @@
+use json_spanned_value as jsv;
+use regex::Regex;
 use std::collections::HashSet;
 
-use regex::Regex;
-
 use crate::{
-    config::{Config, Field},
-    diagnostics::{Diagnostic, ValidationCode},
+    diagnostics::{RplcDiagnostic, Severity, ValidationCode},
 };
 
 const CPP_KEYWORDS: &[&str] = &[
@@ -108,65 +107,120 @@ const CPP_KEYWORDS: &[&str] = &[
     "xor_eq",
 ];
 
-pub fn validate(config: &Config) -> Vec<Diagnostic> {
+pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
     let mut diags = Vec::new();
     let identifier_re = Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*$").unwrap();
 
-    // Packet name
-    if !identifier_re.is_match(&config.packet_name) {
-        diags.push(Diagnostic::error(
-            ValidationCode::InvalidPacketName(config.packet_name.clone()),
-            Some("packet_name".to_string()),
-        ));
-    } else if config
-        .packet_name
-        .chars()
-        .next()
-        .map(|c| c.is_lowercase())
-        .unwrap_or(false)
-    {
-        diags.push(Diagnostic::warning(
-            ValidationCode::NamingConventionPacket(config.packet_name.clone()),
-            Some("packet_name".to_string()),
-        ))
-    }
-    // Command ID
-    if parse_command_id(&config.command_id).is_err() {
-        diags.push(Diagnostic::error(
-            ValidationCode::InvalidCommandIdFormat(config.command_id.clone()),
-            Some("command_id".to_string()),
-        ));
-    }
-    // Field
-    let mut seen_fields = HashSet::new();
-    for field in &config.fields {
-        // format
-        if !identifier_re.is_match(&field.name) {
-            diags.push(Diagnostic::error(
-                ValidationCode::InvalidFieldName(field.name.clone()),
-                Some(field.name.clone()),
-            ));
+    let root: jsv::Value = match jsv::from_str(json_input) {
+        Ok(v) => v,
+        Err(_) => return vec![],
+    };
+
+    let mut add_diag = |severity: Severity, code, span_node: &jsv::Spanned<jsv::Value>| {
+        let span = span_node.span();
+        diags.push(RplcDiagnostic {
+            code,
+            severity, // 使用传入的参数
+            span: Some((span.0, span.1 - span.0)),
+        });
+    };
+
+    if let jsv::Value::Object(map) = root {
+        // Packet name
+        if let Some(name_node) = map.get("packet_name") {
+            if let Some(name) = name_node.as_string() {
+                if !identifier_re.is_match(name) {
+                    add_diag(
+                        Severity::Error,
+                        ValidationCode::InvalidPacketName(name.to_string()),
+                        name_node,
+                    );
+                } else if name
+                    .chars()
+                    .next()
+                    .map(|c| c.is_lowercase())
+                    .unwrap_or(false)
+                {
+                    add_diag(
+                        Severity::Warning,
+                        ValidationCode::NamingConventionPacket(name.to_string()),
+                        name_node,
+                    );
+                }
+            }
         }
-        // keyword
-        if CPP_KEYWORDS.contains(&field.name.as_str()) {
-            diags.push(Diagnostic::error(
-                ValidationCode::KeywordCollision(field.name.clone()),
-                Some(field.name.clone()),
-            ));
+
+        // Command ID
+        if let Some(id_node) = map.get("command_id") {
+            if let Some(id_str) = id_node.as_string() {
+                if crate::validator::parse_command_id(id_str).is_err() {
+                    add_diag(
+                        Severity::Error,
+                        ValidationCode::InvalidCommandId(id_str.to_string()),
+                        id_node,
+                    );
+                }
+            }
         }
-        // repeat
-        if !seen_fields.insert(&field.name) {
-            diags.push(Diagnostic::error(
-                ValidationCode::DuplicateFieldName(field.name.clone()),
-                Some(field.name.clone()),
-            ));
-        }
-        // comment
-        if field.comment.is_none() || field.comment.as_ref().unwrap().trim().is_empty() {
-            diags.push(Diagnostic::warning(
-                ValidationCode::MissingComment(field.name.clone()),
-                Some(field.name.clone()),
-            ));
+
+        // Fields
+        if let Some(field_nodes) = map.get("fields") {
+            let fields = field_nodes.as_array().unwrap();
+            let mut seen_fields = HashSet::new();
+
+            for field_node in fields {
+                if let Some(field_map) = field_node.as_object() {
+                    if let Some(name_node) = field_map.get("name") {
+                        if let Some(name) = name_node.as_string() {
+                            // Format
+                            if !identifier_re.is_match(name) {
+                                add_diag(
+                                    Severity::Error,
+                                    ValidationCode::InvalidFieldName(name.to_string()),
+                                    name_node,
+                                );
+                            }
+
+                            // Keyword
+                            if is_cpp_keyword(name) {
+                                add_diag(
+                                    Severity::Error,
+                                    ValidationCode::KeywordCollision(name.to_string()),
+                                    name_node,
+                                );
+                            }
+
+                            // Repeat
+                            if !seen_fields.insert(name.to_string()) {
+                                add_diag(
+                                    Severity::Error,
+                                    ValidationCode::DuplicateFieldName(name.to_string()),
+                                    name_node,
+                                );
+                            }
+                        }
+                    }
+                    // Comment
+                    let has_comment = field_map
+                        .get("comment")
+                        .and_then(|c| c.as_string())
+                        .map(|s| !s.trim().is_empty())
+                        .unwrap_or(false);
+
+                    if !has_comment {
+                        let target_node = field_map.get("name").unwrap_or(field_node);
+                        let field_name = field_map
+                            .get("name")
+                            .and_then(|n| n.as_string())
+                            .unwrap_or("unknown");
+                        add_diag(
+                            Severity::Warning,
+                            ValidationCode::MissingComment(field_name.to_string()),
+                            target_node,
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -180,6 +234,10 @@ pub fn parse_command_id(id: &str) -> Result<u16, ()> {
     } else {
         clean.parse::<u16>().map_err(|_| ())
     }
+}
+
+pub fn is_cpp_keyword(name: &str) -> bool {
+    CPP_KEYWORDS.contains(&name)
 }
 
 #[cfg(test)]
@@ -225,63 +283,62 @@ mod tests {
 
     #[test]
     fn test_validate_valid_config() {
-        let config = Config {
-            packet_name: "ValidPacket".to_string(), // Valid PascalCase name
-            command_id: "0x0104".to_string(),       // Valid command ID
-            namespace: None,
-            packed: true,
-            header_guard: None,
-            fields: vec![
-                Field {
-                    name: "valid_field".to_string(), // Valid snake_case name
-                    ty: "uint8_t".to_string(),
-                    comment: Some("A valid field".to_string()), // Has comment
+        let json = r#"{
+            "packet_name": "ValidPacket",
+            "command_id": "0x0104",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "fields": [
+                {
+                    "name": "valid_field",
+                    "type": "uint8_t",
+                    "comment": "A valid field"
                 },
-                Field {
-                    name: "another_field".to_string(), // Valid snake_case name
-                    ty: "float".to_string(),
-                    comment: Some("Another valid field".to_string()), // Has comment
-                },
-            ],
-        };
+                {
+                    "name": "another_field",
+                    "type": "float",
+                    "comment": "Another valid field"
+                }
+            ]
+        }"#;
 
-        let diags = validate(&config);
+        let diags = validate(json);
         assert!(diags.is_empty()); // Should have no diagnostics
     }
 
     #[test]
     fn test_validate_invalid_packet_name() {
-        let config = Config {
-            packet_name: "invalid-packet-name".to_string(), // Contains hyphens
-            command_id: "0x0104".to_string(),
-            namespace: None,
-            packed: true,
-            header_guard: None,
-            fields: vec![],
-        };
+        let json = r#"{
+            "packet_name": "invalid-packet-name",
+            "command_id": "0x0104",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "fields": []
+        }"#;
 
-        let diags = validate(&config);
+        let diags = validate(json);
         assert_eq!(diags.len(), 1); // Should have error only (not a valid identifier to check naming convention)
         assert!(matches!(
             diags[0].code,
             ValidationCode::InvalidPacketName(_)
         ));
         assert_eq!(diags[0].severity, Severity::Error);
-        assert_eq!(diags[0].field, Some("packet_name".to_string()));
     }
 
     #[test]
     fn test_validate_lowercase_packet_name_warning() {
-        let config = Config {
-            packet_name: "lowercase_packet".to_string(), // Lowercase - should warn
-            command_id: "0x0104".to_string(),
-            namespace: None,
-            packed: true,
-            header_guard: None,
-            fields: vec![],
-        };
+        let json = r#"{
+            "packet_name": "lowercase_packet",
+            "command_id": "0x0104",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "fields": []
+        }"#;
 
-        let diags = validate(&config);
+        let diags = validate(json);
         assert_eq!(diags.len(), 1); // Should have naming convention warning
         assert!(matches!(
             diags[0].code,
@@ -292,167 +349,167 @@ mod tests {
 
     #[test]
     fn test_validate_invalid_command_id() {
-        let config = Config {
-            packet_name: "ValidPacket".to_string(),
-            command_id: "invalid-id".to_string(), // Invalid format
-            namespace: None,
-            packed: true,
-            header_guard: None,
-            fields: vec![],
-        };
+        let json = r#"{
+            "packet_name": "ValidPacket",
+            "command_id": "invalid-id",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "fields": []
+        }"#;
 
-        let diags = validate(&config);
+        let diags = validate(json);
         assert_eq!(diags.len(), 1); // Should have command ID error
         assert!(matches!(
             diags[0].code,
-            ValidationCode::InvalidCommandIdFormat(_)
+            ValidationCode::InvalidCommandId(_)
         ));
         assert_eq!(diags[0].severity, Severity::Error);
-        assert_eq!(diags[0].field, Some("command_id".to_string()));
     }
 
     #[test]
     fn test_validate_invalid_field_name() {
-        let config = Config {
-            packet_name: "ValidPacket".to_string(),
-            command_id: "0x0104".to_string(),
-            namespace: None,
-            packed: true,
-            header_guard: None,
-            fields: vec![Field {
-                name: "invalid-field".to_string(), // Contains hyphen
-                ty: "uint8_t".to_string(),
-                comment: Some("Invalid field".to_string()),
-            }],
-        };
+        let json = r#"{
+            "packet_name": "ValidPacket",
+            "command_id": "0x0104",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "fields": [
+                {
+                    "name": "invalid-field",
+                    "type": "uint8_t",
+                    "comment": "Invalid field"
+                }
+            ]
+        }"#;
 
-        let diags = validate(&config);
+        let diags = validate(json);
         assert_eq!(diags.len(), 1); // Should have field name error
         assert!(matches!(diags[0].code, ValidationCode::InvalidFieldName(_)));
         assert_eq!(diags[0].severity, Severity::Error);
-        assert_eq!(diags[0].field, Some("invalid-field".to_string()));
     }
 
     #[test]
     fn test_validate_keyword_collision() {
-        let config = Config {
-            packet_name: "ValidPacket".to_string(),
-            command_id: "0x0104".to_string(),
-            namespace: None,
-            packed: true,
-            header_guard: None,
-            fields: vec![Field {
-                name: "class".to_string(), // C++ keyword
-                ty: "uint8_t".to_string(),
-                comment: Some("Class field".to_string()),
-            }],
-        };
+        let json = r#"{
+            "packet_name": "ValidPacket",
+            "command_id": "0x0104",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "fields": [
+                {
+                    "name": "class",
+                    "type": "uint8_t",
+                    "comment": "Class field"
+                }
+            ]
+        }"#;
 
-        let diags = validate(&config);
+        let diags = validate(json);
         assert_eq!(diags.len(), 1); // Should have keyword collision error only (comment is present)
         assert!(matches!(diags[0].code, ValidationCode::KeywordCollision(_)));
         assert_eq!(diags[0].severity, Severity::Error);
-        assert_eq!(diags[0].field, Some("class".to_string()));
     }
 
     #[test]
     fn test_validate_duplicate_field_names() {
-        let config = Config {
-            packet_name: "ValidPacket".to_string(),
-            command_id: "0x0104".to_string(),
-            namespace: None,
-            packed: true,
-            header_guard: None,
-            fields: vec![
-                Field {
-                    name: "duplicate_field".to_string(),
-                    ty: "uint8_t".to_string(),
-                    comment: Some("First field".to_string()),
+        let json = r#"{
+            "packet_name": "ValidPacket",
+            "command_id": "0x0104",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "fields": [
+                {
+                    "name": "duplicate_field",
+                    "type": "uint8_t",
+                    "comment": "First field"
                 },
-                Field {
-                    name: "duplicate_field".to_string(), // Duplicate name
-                    ty: "float".to_string(),
-                    comment: Some("Second field".to_string()),
-                },
-            ],
-        };
+                {
+                    "name": "duplicate_field",
+                    "type": "float",
+                    "comment": "Second field"
+                }
+            ]
+        }"#;
 
-        let diags = validate(&config);
+        let diags = validate(json);
         assert_eq!(diags.len(), 1); // Should have duplicate field error (only for the second occurrence)
         assert!(matches!(
             diags[0].code,
             ValidationCode::DuplicateFieldName(_)
         ));
         assert_eq!(diags[0].severity, Severity::Error);
-        assert_eq!(diags[0].field, Some("duplicate_field".to_string()));
     }
 
     #[test]
     fn test_validate_missing_comment_warning() {
-        let config = Config {
-            packet_name: "ValidPacket".to_string(),
-            command_id: "0x0104".to_string(),
-            namespace: None,
-            packed: true,
-            header_guard: None,
-            fields: vec![Field {
-                name: "field_without_comment".to_string(),
-                ty: "uint8_t".to_string(),
-                comment: None, // Missing comment
-            }],
-        };
+        let json = r#"{
+            "packet_name": "ValidPacket",
+            "command_id": "0x0104",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "fields": [
+                {
+                    "name": "field_without_comment",
+                    "type": "uint8_t",
+                    "comment": null
+                }
+            ]
+        }"#;
 
-        let diags = validate(&config);
+        let diags = validate(json);
         assert_eq!(diags.len(), 1); // Should have missing comment warning
         assert!(matches!(diags[0].code, ValidationCode::MissingComment(_)));
         assert_eq!(diags[0].severity, Severity::Warning);
-        assert_eq!(diags[0].field, Some("field_without_comment".to_string()));
     }
 
     #[test]
     fn test_validate_empty_comment_warning() {
-        let config = Config {
-            packet_name: "ValidPacket".to_string(),
-            command_id: "0x0104".to_string(),
-            namespace: None,
-            packed: true,
-            header_guard: None,
-            fields: vec![Field {
-                name: "field_with_empty_comment".to_string(),
-                ty: "uint8_t".to_string(),
-                comment: Some("".to_string()), // Empty comment
-            }],
-        };
+        let json = r#"{
+            "packet_name": "ValidPacket",
+            "command_id": "0x0104",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "fields": [
+                {
+                    "name": "field_with_empty_comment",
+                    "type": "uint8_t",
+                    "comment": ""
+                }
+            ]
+        }"#;
 
-        let diags = validate(&config);
+        let diags = validate(json);
         assert_eq!(diags.len(), 1); // Should have missing comment warning
         assert!(matches!(diags[0].code, ValidationCode::MissingComment(_)));
         assert_eq!(diags[0].severity, Severity::Warning);
-        assert_eq!(diags[0].field, Some("field_with_empty_comment".to_string()));
     }
 
     #[test]
     fn test_validate_whitespace_only_comment_warning() {
-        let config = Config {
-            packet_name: "ValidPacket".to_string(),
-            command_id: "0x0104".to_string(),
-            namespace: None,
-            packed: true,
-            header_guard: None,
-            fields: vec![Field {
-                name: "field_with_whitespace_comment".to_string(),
-                ty: "uint8_t".to_string(),
-                comment: Some("   \t\n  ".to_string()), // Whitespace only comment
-            }],
-        };
+        let json = r#"{
+            "packet_name": "ValidPacket",
+            "command_id": "0x0104",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "fields": [
+                {
+                    "name": "field_with_whitespace_comment",
+                    "type": "uint8_t",
+                    "comment": "   \t\n  "
+                }
+            ]
+        }"#;
 
-        let diags = validate(&config);
+        let diags = validate(json);
         assert_eq!(diags.len(), 1); // Should have missing comment warning
         assert!(matches!(diags[0].code, ValidationCode::MissingComment(_)));
         assert_eq!(diags[0].severity, Severity::Warning);
-        assert_eq!(
-            diags[0].field,
-            Some("field_with_whitespace_comment".to_string())
-        );
     }
 }
