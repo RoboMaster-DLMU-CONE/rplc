@@ -7,3 +7,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+
+rplc_core = { path = "../rplc_core" }
+clap.workspace = true
+miette.workspace = true
+anyhow.workspace = true
