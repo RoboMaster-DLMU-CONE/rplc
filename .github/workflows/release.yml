@@ -105,7 +105,7 @@ jobs:
       - name: Prepare WASM archive
         run: |
           mkdir -p rplc_wasm_dist
-          cp -r crates/rplc_wasm/pkg rplc_wasm_dist/
+          cp -r crates/rplc_wasm/pkg/* rplc_wasm_dist/  # Copy files directly, not the pkg directory
           cp README.md rplc_wasm_dist/ 2>/dev/null || echo "No README.md file to copy"
           cp doc/schema.md rplc_wasm_dist/ 2>/dev/null || echo "No schema.md file to copy"
 
@@ -117,7 +117,7 @@ jobs:
             "main": "rplc_wasm.js",
             "module": "rplc_wasm.js",
             "types": "rplc_wasm.d.ts",
-            "files": ["pkg/*"],
+            "files": ["*.js", "*.d.ts", "*.wasm", "README.md", "doc/schema.md"],
             "keywords": ["robomaster", "rplc", "wasm", "packet", "protocol"],
             "author": "WindWeaver",
             "license": "ICS",
@@ -139,9 +139,42 @@ jobs:
           name: wasm-package
           path: rplc_wasm.tar.gz
 
+  # Publish WASM package to npm
+  publish-npm:
+    needs: [build-wasm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # Required for using OIDC authentication with npm
+    steps:
+      - name: Download WASM package
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm-package
+          path: ./downloaded
+
+      - name: Extract WASM package
+        run: |
+          tar -xzf ./downloaded/rplc_wasm.tar.gz
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          registry-url: 'https://registry.npmjs.org/'
+          # Enable npm provenance
+          always-auth: true
+
+      - name: Publish to npm
+        run: |
+          cd rplc_wasm_dist
+          npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
   # Create GitHub release and upload all assets
   release:
-    needs: [build-cli, build-wasm]
+    needs: [build-cli, build-wasm, publish-npm]
     runs-on: ubuntu-latest
     steps:
       - name: Download CLI assets
@@ -171,10 +204,9 @@ jobs:
             This release includes:
             - CLI executables for multiple platforms
             - WASM bindings for web usage
-            - Updated documentation
-            
+
             See the changelog in the repository for more details.
-            
+
             Note that this is an automated release. For the full changelog, please refer to the commit history.
           draft: false
           prerelease: false
