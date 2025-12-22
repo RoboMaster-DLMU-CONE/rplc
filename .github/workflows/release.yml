@@ -1,0 +1,180 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Build the CLI for multiple platforms
+  build-cli:
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - name: linux-x86_64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            bin: rplc_cli
+            archive_ext: ''
+
+          - name: windows-x86_64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin: rplc_cli.exe
+            archive_ext: .exe
+
+          - name: macos-x86_64
+            runner: macos-latest
+            target: x86_64-apple-darwin
+            bin: rplc_cli
+            archive_ext: ''
+
+          - name: macos-aarch64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            bin: rplc_cli
+            archive_ext: ''
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install target
+        run: rustup target add ${{ matrix.platform.target }}
+
+      - name: Install musl-tools on Linux
+        if: contains(matrix.platform.name, 'linux')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.platform.target }} --bin rplc_cli
+
+      - name: Prepare archive
+        if: matrix.platform.runner != 'windows-latest'
+        shell: bash
+        run: |
+          cd target/${{ matrix.platform.target }}/release
+          tar czvf ${{ github.workspace }}/${{ matrix.platform.name }}.tar.gz rplc_cli${{ matrix.platform.archive_ext }}
+
+      - name: Prepare archive (Windows)
+        if: matrix.platform.runner == 'windows-latest'
+        shell: pwsh
+        run: |
+          Set-Location "target\${{ matrix.platform.target }}\release"
+          Compress-Archive -Path "rplc_cli${{ matrix.platform.archive_ext }}" -DestinationPath "${{ github.workspace }}\${{ matrix.platform.name }}.zip" -Force
+
+      - name: Upload release asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.platform.name }}
+          path: ${{ github.workspace }}/${{ matrix.platform.name }}.*
+
+  # Build and package WASM
+  build-wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build WASM package
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cd crates/rplc_wasm
+          wasm-pack build --target web -d pkg --release
+
+      - name: Prepare WASM archive
+        run: |
+          mkdir -p rplc_wasm_dist
+          cp -r crates/rplc_wasm/pkg rplc_wasm_dist/
+          cp README.md rplc_wasm_dist/ 2>/dev/null || echo "No README.md file to copy"
+          cp doc/schema.md rplc_wasm_dist/ 2>/dev/null || echo "No schema.md file to copy"
+
+          # Create a package.json for the WASM distribution
+          jq -n --arg version "${{ github.ref_name }}" '{
+            "name": "@robomaster-cone/rplc-wasm",
+            "version": $version,
+            "description": "WASM bindings for RPLC - RoboMaster Packet Library Compiler",
+            "main": "rplc_wasm.js",
+            "module": "rplc_wasm.js",
+            "types": "rplc_wasm.d.ts",
+            "files": ["pkg/*"],
+            "keywords": ["robomaster", "rplc", "wasm", "packet", "protocol"],
+            "author": "WindWeaver",
+            "license": "ICS",
+            "repository": {
+              "type": "git",
+              "url": "https://github.com/RoboMaster-DLMU-CONE/rplc.git"
+            },
+            "bugs": {
+              "url": "https://github.com/RoboMaster-DLMU-CONE/rplc/issues"
+            },
+            "homepage": "https://github.com/RoboMaster-DLMU-CONE/rplc#readme"
+          }' > rplc_wasm_dist/package.json
+
+          tar czvf rplc_wasm.tar.gz rplc_wasm_dist
+          
+      - name: Upload WASM asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-package
+          path: rplc_wasm.tar.gz
+
+  # Create GitHub release and upload all assets
+  release:
+    needs: [build-cli, build-wasm]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download CLI assets
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Download WASM asset
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm-package
+          path: ./artifacts
+
+      - name: Display structure of downloaded artifacts
+        run: ls -R ./artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ./artifacts/cli-*/*
+            ./artifacts/rplc_wasm.tar.gz
+          name: Release ${{ github.ref_name }}
+          body: |
+            Automated release of RPLC ${{ github.ref_name }}
+
+            This release includes:
+            - CLI executables for multiple platforms
+            - WASM bindings for web usage
+            - Updated documentation
+            
+            See the changelog in the repository for more details.
+            
+            Note that this is an automated release. For the full changelog, please refer to the commit history.
+          draft: false
+          prerelease: false
