@@ -63,7 +63,7 @@ pub fn generate(json_input: &str) -> Result<String, GenerateError> {
     ));
     out.push_str("{\n");
     out.push_str(&format!(
-        "    static constexpr uint16_t cmd = {};\n",
+        "    static constexpr uint16_t cmd = 0x{:04X};\n",
         cmd_id
     ));
     out.push_str(&format!(
@@ -114,7 +114,7 @@ mod tests {
         assert!(result.contains("__attribute__((packed)) BasicPacket"));
         assert!(result.contains("uint8_t field1; // First field"));
         assert!(result.contains("float field2; // Second field"));
-        assert!(result.contains("static constexpr uint16_t cmd = 260;")); // 0x0104 = 260
+        assert!(result.contains("static constexpr uint16_t cmd = 0x0104;"));
         assert!(result.contains("static constexpr size_t size = sizeof(BasicPacket)"));
         assert!(result.contains("#endif // RPL_BASICPACKET_HPP"));
     }
@@ -142,7 +142,7 @@ mod tests {
         assert!(result.contains("__attribute__((packed)) NamespacePacket"));
         assert!(result.contains("uint16_t sensor_id; // Sensor identifier"));
         assert!(result.contains("// namespace Robot::Sensors"));
-        assert!(result.contains("static constexpr uint16_t cmd = 43981;")); // 0xABCD = 43981
+        assert!(result.contains("static constexpr uint16_t cmd = 0xABCD;"));
     }
 
     #[test]
