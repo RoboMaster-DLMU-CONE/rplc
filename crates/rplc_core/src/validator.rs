@@ -170,7 +170,7 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
             let mut seen_fields = HashSet::new();
 
             // 存储位域信息用于后续检查
-            let mut bitfield_info: Vec<(String, String, u8, u8)> = Vec::new(); // (field_name, field_type, type_bits, bitfield_bits)
+            let mut bit_field_info: Vec<(String, String, u8, u8)> = Vec::new(); // (field_name, field_type, type_bits, bit_field_bits)
 
             for field_node in fields {
                 let mut field_name: String = "".to_string();
@@ -228,30 +228,30 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
                     }
 
                     // Bit-Field
-                    let has_bitfield = if let Some(bitfield_node) = field_map.get("bitfield") {
+                    let has_bit_field = if let Some(bit_field_node) = field_map.get("bit_field") {
                         // 检查位域值是否为数字
-                        if let Some(bitfield_num) = bitfield_node.as_number() {
+                        if let Some(bit_field_num) = bit_field_node.as_number() {
                             // 检查位域值是否为整数
-                            if !bitfield_num.is_i64() {
+                            if !bit_field_num.is_i64() {
                                 add_diag(
                                     Severity::Error,
                                     ValidationCode::InvalidBitField(field_name.clone()),
-                                    bitfield_node,
+                                    bit_field_node,
                                 );
                                 false
-                            } else if let Some(bitfield_value) = bitfield_num.as_i64() {
+                            } else if let Some(bit_field_value) = bit_field_num.as_i64() {
                                 // 检查位域值是否为正数
-                                if bitfield_value <= 0 {
+                                if bit_field_value <= 0 {
                                     add_diag(
                                         Severity::Error,
                                         ValidationCode::InvalidBitField(field_name.clone()),
-                                        bitfield_node,
+                                        bit_field_node,
                                     );
                                     false
                                 } else {
                                     // 检查类型是否支持位域
                                     if let Some(field_type) = ty {
-                                        let type_size = c_type_to_bitfield_size(field_type);
+                                        let type_size = c_type_to_bit_field_size(field_type);
                                         if type_size.is_none() {
                                             add_diag(
                                                 Severity::Error,
@@ -259,31 +259,31 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
                                                     field_name.clone(),
                                                     field_type.to_string(),
                                                 ),
-                                                bitfield_node,
+                                                bit_field_node,
                                             );
                                             false
                                         } else {
                                             // 检查位域长度是否超过类型本身的大小
                                             let type_bits = type_size.unwrap() * 8;
-                                            let bitfield_value_u8 = bitfield_value as u8;
-                                            if bitfield_value_u8 > type_bits {
+                                            let bit_field_value_u8 = bit_field_value as u8;
+                                            if bit_field_value_u8 > type_bits {
                                                 add_diag(
                                                     Severity::Error,
                                                     ValidationCode::BitFieldLengthOverflow(
                                                         field_name.clone(),
-                                                        bitfield_value_u8,
+                                                        bit_field_value_u8,
                                                         type_bits,
                                                     ),
-                                                    bitfield_node,
+                                                    bit_field_node,
                                                 );
                                                 false
                                             } else {
                                                 // 记录位域信息用于后续检查
-                                                bitfield_info.push((
+                                                bit_field_info.push((
                                                     field_name.clone(),
                                                     field_type.to_string(),
                                                     type_bits,
-                                                    bitfield_value_u8,
+                                                    bit_field_value_u8,
                                                 ));
                                                 true // 有效的位域
                                             }
@@ -301,7 +301,7 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
                                 add_diag(
                                     Severity::Error,
                                     ValidationCode::InvalidBitField(field_name.clone()),
-                                    bitfield_node,
+                                    bit_field_node,
                                 );
                                 false
                             }
@@ -309,7 +309,7 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
                             add_diag(
                                 Severity::Error,
                                 ValidationCode::InvalidBitField(field_name.clone()),
-                                bitfield_node,
+                                bit_field_node,
                             );
                             false
                         }
@@ -317,7 +317,7 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
                         false
                     };
 
-                    if has_bitfield && !is_packed {
+                    if has_bit_field && !is_packed {
                         add_diag(
                             Severity::Warning,
                             ValidationCode::BitFieldMissingPackedAttr(field_name.clone()),
@@ -348,21 +348,21 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
             }
 
             // 检查跨存储单元边界的位域
-            if !is_packed && bitfield_info.len() > 1 {
-                for i in 1..bitfield_info.len() {
-                    let (prev_field_name, _prev_field_type, _prev_type_bits, prev_bitfield_bits) =
-                        &bitfield_info[i - 1];
-                    let (field_name, _field_type, type_bits, bitfield_bits) = &bitfield_info[i];
+            if !is_packed && bit_field_info.len() > 1 {
+                for i in 1..bit_field_info.len() {
+                    let (prev_field_name, _prev_field_type, _prev_type_bits, prev_bit_field_bits) =
+                        &bit_field_info[i - 1];
+                    let (field_name, _field_type, type_bits, bit_field_bits) = &bit_field_info[i];
 
                     // 如果前一个位域和当前位域的总和超过类型位数，则存在跨边界问题
-                    if prev_bitfield_bits + bitfield_bits > *type_bits {
+                    if prev_bit_field_bits + bit_field_bits > *type_bits {
                         add_diag(
                             Severity::Error,
                             ValidationCode::BitFieldStraddleBoundaryWithoutPacked(
                                 prev_field_name.clone(),
                                 field_name.clone(),
-                                *prev_bitfield_bits,
-                                *bitfield_bits,
+                                *prev_bit_field_bits,
+                                *bit_field_bits,
                                 *type_bits,
                             ),
                             field_nodes, // 使用整个fields数组作为节点
@@ -372,8 +372,8 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
             }
 
             // 检查单个位域是否跨越边界
-            for (field_name, field_type, type_bits, bitfield_bits) in &bitfield_info {
-                if *bitfield_bits == *type_bits && !is_packed {
+            for (field_name, field_type, type_bits, bit_field_bits) in &bit_field_info {
+                if *bit_field_bits == *type_bits && !is_packed {
                     add_diag(
                         Severity::Warning,
                         ValidationCode::BitFieldStraddleBoundary(field_name.clone()),
@@ -400,7 +400,7 @@ pub fn is_cpp_keyword(name: &str) -> bool {
     CPP_KEYWORDS.contains(&name)
 }
 
-pub fn c_type_to_bitfield_size(ty: &str) -> Option<u8> {
+pub fn c_type_to_bit_field_size(ty: &str) -> Option<u8> {
     match ty {
         "unsigned int" | "signed int" | "int" => Some(4),
         "_Bool" | "bool" => Some(1),
@@ -691,5 +691,227 @@ mod tests {
         assert_eq!(diags.len(), 1); // Should have missing comment warning
         assert!(matches!(diags[0].code, ValidationCode::MissingComment(_)));
         assert_eq!(diags[0].severity, Severity::Warning);
+    }
+
+    #[test]
+    fn test_validate_valid_bit_field() {
+        let json = r#"{
+            "packet_name": "BitFieldPacket",
+            "command_id": "0x0105",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "fields": [
+                {
+                    "name": "status",
+                    "type": "uint8_t",
+                    "bit_field": 4,
+                    "comment": "Status field"
+                },
+                {
+                    "name": "flag",
+                    "type": "uint8_t",
+                    "bit_field": 3,
+                    "comment": "Flag field"
+                }
+            ]
+        }"#;
+
+        let diags = validate(json);
+        assert!(diags.is_empty()); // Should have no diagnostics for valid bit fields
+    }
+
+    #[test]
+    fn test_validate_invalid_bit_field_value() {
+        let json = r#"{
+            "packet_name": "InvalidBitFieldPacket",
+            "command_id": "0x0105",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "fields": [
+                {
+                    "name": "invalid_bit_field",
+                    "type": "uint8_t",
+                    "bit_field": -1,
+                    "comment": "Invalid bit_field value"
+                }
+            ]
+        }"#;
+
+        let diags = validate(json);
+        assert_eq!(diags.len(), 1);
+        assert!(matches!(diags[0].code, ValidationCode::InvalidBitField(_)));
+        assert_eq!(diags[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn test_validate_invalid_bit_field_type() {
+        let json = r#"{
+            "packet_name": "InvalidBitFieldType",
+            "command_id": "0x0105",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "fields": [
+                {
+                    "name": "float_bit_field",
+                    "type": "float",
+                    "bit_field": 5,
+                    "comment": "Bitfield on float type"
+                }
+            ]
+        }"#;
+
+        let diags = validate(json);
+        assert_eq!(diags.len(), 1);
+        assert!(matches!(
+            diags[0].code,
+            ValidationCode::BitFieldOnInvalidType(_, _)
+        ));
+        assert_eq!(diags[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn test_validate_bit_field_length_overflow() {
+        let json = r#"{
+            "packet_name": "OverflowBitField",
+            "command_id": "0x0105",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "fields": [
+                {
+                    "name": "overflow_field",
+                    "type": "uint8_t",
+                    "bit_field": 10,
+                    "comment": "Bitfield exceeding type size"
+                }
+            ]
+        }"#;
+
+        let diags = validate(json);
+        assert_eq!(diags.len(), 1);
+        assert!(matches!(
+            diags[0].code,
+            ValidationCode::BitFieldLengthOverflow(_, _, _)
+        ));
+        assert_eq!(diags[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn test_validate_bit_field_missing_packed_attr_warning() {
+        let json = r#"{
+            "packet_name": "UnpackedBitField",
+            "command_id": "0x0105",
+            "namespace": null,
+            "packed": false,
+            "header_guard": null,
+            "fields": [
+                {
+                    "name": "status",
+                    "type": "uint8_t",
+                    "bit_field": 4,
+                    "comment": "Status field"
+                }
+            ]
+        }"#;
+
+        let diags = validate(json);
+        assert_eq!(diags.len(), 1);
+        assert!(matches!(
+            diags[0].code,
+            ValidationCode::BitFieldMissingPackedAttr(_)
+        ));
+        assert_eq!(diags[0].severity, Severity::Warning);
+    }
+
+    #[test]
+    fn test_validate_bit_field_straddle_boundary_without_packed_error() {
+        let json = r#"{
+            "packet_name": "StraddleBoundary",
+            "command_id": "0x0105",
+            "namespace": null,
+            "packed": false,
+            "header_guard": null,
+            "fields": [
+                {
+                    "name": "field1",
+                    "type": "uint8_t",
+                    "bit_field": 5,
+                    "comment": "First field"
+                },
+                {
+                    "name": "field2",
+                    "type": "uint8_t",
+                    "bit_field": 4,
+                    "comment": "Second field"
+                }
+            ]
+        }"#;
+
+        let diags = validate(json);
+        assert!(diags.len() >= 2); // At least 2: one for missing packed attr (for each field) and one for straddle boundary
+        let cross_boundary_errors: Vec<_> = diags
+            .iter()
+            .filter(|d| {
+                matches!(
+                    d.code,
+                    ValidationCode::BitFieldStraddleBoundaryWithoutPacked(_, _, _, _, _)
+                )
+            })
+            .collect();
+        assert_eq!(cross_boundary_errors.len(), 1);
+        assert_eq!(cross_boundary_errors[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn test_validate_bit_field_straddle_boundary_warning() {
+        let json = r#"{
+            "packet_name": "FullBitField",
+            "command_id": "0x0105",
+            "namespace": null,
+            "packed": false,
+            "header_guard": null,
+            "fields": [
+                {
+                    "name": "full_field",
+                    "type": "uint8_t",
+                    "bit_field": 8,
+                    "comment": "Full bit_field"
+                }
+            ]
+        }"#;
+
+        let diags = validate(json);
+        assert_eq!(diags.len(), 2); // One for missing packed attribute, one for straddle boundary
+        let bit_field_warnings: Vec<_> = diags
+            .iter()
+            .filter(|d| matches!(d.code, ValidationCode::BitFieldStraddleBoundary(_)))
+            .collect();
+        assert_eq!(bit_field_warnings.len(), 1);
+        assert_eq!(bit_field_warnings[0].severity, Severity::Warning);
+    }
+
+    #[test]
+    fn test_c_type_to_bit_field_size() {
+        // Test valid types
+        assert_eq!(c_type_to_bit_field_size("uint8_t"), Some(1));
+        assert_eq!(c_type_to_bit_field_size("int8_t"), Some(1));
+        assert_eq!(c_type_to_bit_field_size("uint16_t"), Some(2));
+        assert_eq!(c_type_to_bit_field_size("int16_t"), Some(2));
+        assert_eq!(c_type_to_bit_field_size("uint32_t"), Some(4));
+        assert_eq!(c_type_to_bit_field_size("int32_t"), Some(4));
+        assert_eq!(c_type_to_bit_field_size("uint64_t"), Some(8));
+        assert_eq!(c_type_to_bit_field_size("int64_t"), Some(8));
+        assert_eq!(c_type_to_bit_field_size("int"), Some(4));
+        assert_eq!(c_type_to_bit_field_size("char"), Some(1));
+        assert_eq!(c_type_to_bit_field_size("bool"), Some(1));
+
+        // Test invalid types
+        assert_eq!(c_type_to_bit_field_size("float"), None);
+        assert_eq!(c_type_to_bit_field_size("double"), None);
+        assert_eq!(c_type_to_bit_field_size("void*"), None);
+        assert_eq!(c_type_to_bit_field_size("invalid_type"), None);
     }
 }

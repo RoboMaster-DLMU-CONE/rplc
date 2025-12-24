@@ -60,14 +60,14 @@ pub enum ValidationCode {
     )]
     BitFieldOnInvalidType(String, String),
 
-    #[error("字段 '{0}' 的位域限定符长度: {0} 超过了其类型本身的大小: {0}")]
+    #[error("字段 '{0}' 的位域限定符长度: {1} 超过了其类型本身的大小: {2}")]
     #[diagnostic(
         code(rplc::bit_field::length_overflow),
         help("位域限定符长度不能超过其类型本身")
     )]
     BitFieldLengthOverflow(String, u8, u8),
 
-    #[error("位域字段 '{0}' 和 '{0}' 存在跨存储单元行为({0} + {0} > {0})，且内存布局非紧凑")]
+    #[error("位域字段 '{0}' 和 '{1}' 存在跨存储单元行为({2} + {3} > {4})，且内存布局非紧凑")]
     #[diagnostic(
         code(rplc::bit_field::straddle_boundary_without_packed),
         help("非紧凑情况下的跨储存单元位域没有意义，请去除位域定义或添加紧凑内存限定符")
@@ -226,5 +226,73 @@ mod tests {
         assert_eq!(original.severity, cloned.severity);
         assert_eq!(original.code, cloned.code);
         assert_eq!(original.span, cloned.span);
+    }
+
+    #[test]
+    fn test_validation_code_bit_field_error_messages() {
+        // Test bit field error messages
+        assert_eq!(
+            ValidationCode::InvalidBitField("field_name".to_string()).to_string(),
+            "'field_name' 的位域限定符无效"
+        );
+        assert_eq!(
+            ValidationCode::BitFieldOnInvalidType("field_name".to_string(), "float".to_string()).to_string(),
+            "字段 'field_name' 在不允许的变量类型: 'field_name' 上添加了位域限定符"
+        );
+        assert_eq!(
+            ValidationCode::BitFieldLengthOverflow("field_name".to_string(), 10, 8).to_string(),
+            "字段 'field_name' 的位域限定符长度: 10 超过了其类型本身的大小: 8"
+        );
+        assert_eq!(
+            ValidationCode::BitFieldStraddleBoundaryWithoutPacked("field1".to_string(), "field2".to_string(), 5, 6, 8).to_string(),
+            "位域字段 'field1' 和 'field2' 存在跨存储单元行为(5 + 6 > 8)，且内存布局非紧凑"
+        );
+
+        // Test bit field warning messages
+        assert_eq!(
+            ValidationCode::BitFieldMissingPackedAttr("field_name".to_string()).to_string(),
+            "'field_name' 字段使用位域的同时未启用紧凑结构体"
+        );
+        assert_eq!(
+            ValidationCode::BitFieldStraddleBoundary("field_name".to_string()).to_string(),
+            "'field_name 字段位域跨越了存储单元边界"
+        );
+    }
+
+    #[test]
+    fn test_validation_code_bit_field_equality() {
+        let code1 = ValidationCode::InvalidBitField("test_field".to_string());
+        let code2 = ValidationCode::InvalidBitField("test_field".to_string());
+        let code3 = ValidationCode::InvalidBitField("other_field".to_string());
+        let code4 = ValidationCode::BitFieldOnInvalidType("field".to_string(), "type".to_string());
+
+        assert_eq!(code1, code2);
+        assert_ne!(code1, code3);
+        assert_ne!(code1, code4);
+    }
+
+    #[test]
+    fn test_rplc_diagnostic_with_bit_field_codes() {
+        let error_diag = RplcDiagnostic {
+            code: ValidationCode::InvalidBitField("bad_field".to_string()),
+            severity: Severity::Error,
+            span: None,
+        };
+        assert_eq!(error_diag.severity, Severity::Error);
+        assert_eq!(
+            error_diag.code,
+            ValidationCode::InvalidBitField("bad_field".to_string())
+        );
+
+        let warning_diag = RplcDiagnostic {
+            code: ValidationCode::BitFieldMissingPackedAttr("warn_field".to_string()),
+            severity: Severity::Warning,
+            span: Some((10, 20)),
+        };
+        assert_eq!(warning_diag.severity, Severity::Warning);
+        assert_eq!(
+            warning_diag.code,
+            ValidationCode::BitFieldMissingPackedAttr("warn_field".to_string())
+        );
     }
 }

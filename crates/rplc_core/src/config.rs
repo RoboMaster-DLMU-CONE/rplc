@@ -5,7 +5,6 @@ pub struct Field {
     pub name: String,
     #[serde(rename = "type")]
     pub ty: String,
-    #[serde(rename = "bitfield")]
     pub bit_field: Option<u8>,
     pub comment: Option<String>,
 }
@@ -165,5 +164,92 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         let parsed: Config = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.packed, false);
+    }
+
+    #[test]
+    fn test_field_with_bit_field_serialization() {
+        let field = Field {
+            name: "status_flag".to_string(),
+            ty: "uint8_t".to_string(),
+            bit_field: Some(3),
+            comment: Some("状态标志".to_string()),
+        };
+
+        let json = serde_json::to_string(&field).unwrap();
+        assert!(json.contains(r#""bit_field":3"#));
+
+        let parsed: Field = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.name, "status_flag");
+        assert_eq!(parsed.ty, "uint8_t");
+        assert_eq!(parsed.bit_field, Some(3));
+        assert_eq!(parsed.comment, Some("状态标志".to_string()));
+    }
+
+    #[test]
+    fn test_field_without_bit_field_serialization() {
+        let field = Field {
+            name: "temperature".to_string(),
+            ty: "float".to_string(),
+            bit_field: None,
+            comment: Some("温度值".to_string()),
+        };
+
+        let json = serde_json::to_string(&field).unwrap();
+
+        let parsed: Field = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.name, "temperature");
+        assert_eq!(parsed.ty, "float");
+        assert_eq!(parsed.bit_field, None);
+        assert_eq!(parsed.comment, Some("温度值".to_string()));
+    }
+
+    #[test]
+    fn test_config_with_bit_fields_serialization() {
+        let config = Config {
+            packet_name: "SensorStatus".to_string(),
+            command_id: "0x0301".to_string(),
+            namespace: None,
+            packed: true,
+            header_guard: Some("RPL_SENSORSTATUS_HPP".to_string()),
+            fields: vec![
+                Field {
+                    name: "sensor_id".to_string(),
+                    ty: "uint8_t".to_string(),
+                    bit_field: Some(4),
+                    comment: Some("传感器ID".to_string()),
+                },
+                Field {
+                    name: "status_flag".to_string(),
+                    ty: "uint8_t".to_string(),
+                    bit_field: Some(3),
+                    comment: Some("状态标志".to_string()),
+                },
+                Field {
+                    name: "reserved".to_string(),
+                    ty: "uint8_t".to_string(),
+                    bit_field: Some(1),
+                    comment: Some("保留位".to_string()),
+                },
+                Field {
+                    name: "temperature".to_string(),
+                    ty: "float".to_string(),
+                    bit_field: None,
+                    comment: Some("温度值".to_string()),
+                },
+            ],
+        };
+
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains(r#""bit_field":4"#));
+        assert!(json.contains(r#""bit_field":3"#));
+        assert!(json.contains(r#""bit_field":1"#));
+
+        let parsed: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.packet_name, "SensorStatus");
+        assert_eq!(parsed.fields.len(), 4);
+        assert_eq!(parsed.fields[0].bit_field, Some(4));
+        assert_eq!(parsed.fields[1].bit_field, Some(3));
+        assert_eq!(parsed.fields[2].bit_field, Some(1));
+        assert_eq!(parsed.fields[3].bit_field, None);
     }
 }

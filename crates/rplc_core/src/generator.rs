@@ -46,8 +46,14 @@ pub fn generate(json_input: &str) -> Result<String, GenerateError> {
     };
     out.push_str(&format!("struct {}{}\n{{\n", packed, config.packet_name));
 
+    // Fields
     for field in &config.fields {
-        out.push_str(&format!("    {} {};", field.ty, field.name));
+        out.push_str(&format!("    {} {}", field.ty, field.name));
+        if let Some(bf) = field.bit_field {
+            out.push_str(&format!(" : {};", bf));
+        } else {
+            out.push(';');
+        }
         if let Some(cmt) = &field.comment {
             out.push_str(&format!(" // {}", cmt));
         }
@@ -296,5 +302,132 @@ mod tests {
             GenerateError::ValidationError => (), // Expected
             _ => panic!("Expected ValidationError"),
         }
+    }
+
+    #[test]
+    fn test_generate_with_bit_fields() {
+        let json = r#"{
+            "packet_name": "BitFieldPacket",
+            "command_id": "0x0105",
+            "namespace": null,
+            "packed": true,
+            "header_guard": "RPL_BITFIELDPACKET_HPP",
+            "fields": [
+                {
+                    "name": "status",
+                    "type": "uint8_t",
+                    "bit_field": 4,
+                    "comment": "Status field"
+                },
+                {
+                    "name": "flag",
+                    "type": "uint8_t",
+                    "bit_field": 3,
+                    "comment": "Flag field"
+                },
+                {
+                    "name": "reserved",
+                    "type": "uint8_t",
+                    "bit_field": 1,
+                    "comment": "Reserved bit"
+                },
+                {
+                    "name": "normal_field",
+                    "type": "uint16_t",
+                    "comment": "Normal field without bit field"
+                }
+            ]
+        }"#;
+
+        let result = generate(json).unwrap();
+
+        assert!(result.contains("#ifndef RPL_BITFIELDPACKET_HPP"));
+        assert!(result.contains("__attribute__((packed)) BitFieldPacket"));
+        assert!(result.contains("uint8_t status : 4; // Status field"));
+        assert!(result.contains("uint8_t flag : 3; // Flag field"));
+        assert!(result.contains("uint8_t reserved : 1; // Reserved bit"));
+        assert!(result.contains("uint16_t normal_field; // Normal field without bit field"));
+        assert!(result.contains("static constexpr uint16_t cmd = 0x0105;"));
+    }
+
+    #[test]
+    fn test_generate_with_mixed_fields_and_bit_fields() {
+        let json = r#"{
+            "packet_name": "MixedFieldsPacket",
+            "command_id": "0x0205",
+            "namespace": "Robot::Controls",
+            "packed": false,
+            "header_guard": "RPL_MIXEDFIELDSPACKET_HPP",
+            "fields": [
+                {
+                    "name": "cmd_type",
+                    "type": "uint8_t",
+                    "bit_field": 6,
+                    "comment": "Command type"
+                },
+                {
+                    "name": "priority",
+                    "type": "uint8_t",
+                    "bit_field": 2,
+                    "comment": "Priority level"
+                },
+                {
+                    "name": "data",
+                    "type": "uint32_t",
+                    "comment": "Data payload"
+                }
+            ]
+        }"#;
+
+        let result = generate(json).unwrap();
+
+        assert!(result.contains("namespace Robot::Controls {"));
+        assert!(!result.contains("__attribute__((packed))")); // packed is false
+        assert!(result.contains("uint8_t cmd_type : 6; // Command type"));
+        assert!(result.contains("uint8_t priority : 2; // Priority level"));
+        assert!(result.contains("uint32_t data; // Data payload"));
+        assert!(result.contains("// namespace Robot::Controls"));
+        assert!(result.contains("static constexpr uint16_t cmd = 0x0205;"));
+    }
+
+    #[test]
+    fn test_generate_with_bit_fields_without_comments() {
+        let json = r#"{
+            "packet_name": "BitFieldsNoComments",
+            "command_id": "0x0305",
+            "namespace": null,
+            "packed": true,
+            "header_guard": "RPL_BITFIELDSNOCOMMENTS_HPP",
+            "fields": [
+                {
+                    "name": "field1",
+                    "type": "uint16_t",
+                    "bit_field": 8
+                },
+                {
+                    "name": "field2",
+                    "type": "uint16_t",
+                    "bit_field": 7
+                },
+                {
+                    "name": "field3",
+                    "type": "uint16_t",
+                    "bit_field": 1
+                }
+            ]
+        }"#;
+
+        let result = generate(json).unwrap();
+
+        assert!(result.contains("#ifndef RPL_BITFIELDSNOCOMMENTS_HPP"));
+        assert!(result.contains("__attribute__((packed)) BitFieldsNoComments"));
+        assert!(result.contains("uint16_t field1 : 8;"));
+        assert!(result.contains("uint16_t field2 : 7;"));
+        assert!(result.contains("uint16_t field3 : 1;"));
+        // Ensure there are no trailing comments or malformed lines
+        assert!(!result.contains(" : 8; //"));
+        assert!(!result.contains(" : 7; //"));
+        assert!(!result.contains(" : 1; //"));
+        assert!(result.contains("static constexpr uint16_t cmd = 0x0305;"));
     }
 }
