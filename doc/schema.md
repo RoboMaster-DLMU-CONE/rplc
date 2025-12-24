@@ -45,6 +45,7 @@ RPLC（RPL Compiler）是RPL库的包生成工具，通过JSON配置文件生成
 |-----------|--------|----|-------------------|-----------------|
 | `name`    | string | ✓  | 字段名称，必须符合C++标识符规范 | `"temperature"` |
 | `type`    | string | ✓  | C++数据类型，见支持的类型列表  | `"float"`       |
+| `bit_field`| number | ✗  | 位域宽度，指定该字段占用的位数  | `3`             |
 | `comment` | string | ✗  | 字段注释，支持中英文        | `"温度值(摄氏度)"`    |
 
 ### 支持的数据类型
@@ -140,6 +141,42 @@ RPLC（RPL Compiler）是RPL库的包生成工具，通过JSON配置文件生成
 }
 ```
 
+### 示例3：带位域的传感器状态包
+
+```json
+{
+  "packet_name": "SensorStatus",
+  "command_id": "0x0301",
+  "namespace": null,
+  "packed": true,
+  "fields": [
+    {
+      "name": "sensor_id",
+      "type": "uint8_t",
+      "bit_field": 4,
+      "comment": "传感器ID"
+    },
+    {
+      "name": "status_flag",
+      "type": "uint8_t",
+      "bit_field": 3,
+      "comment": "状态标志"
+    },
+    {
+      "name": "reserved",
+      "type": "uint8_t",
+      "bit_field": 1,
+      "comment": "保留位"
+    },
+    {
+      "name": "temperature",
+      "type": "float",
+      "comment": "温度值"
+    }
+  ]
+}
+```
+
 ## 生成的代码结构
 
 使用上述配置会生成如下格式的C++头文件：
@@ -189,6 +226,44 @@ struct RPL::Meta::PacketTraits<Robot::Navigation::RobotPosition> : PacketTraitsB
 };
 ```
 
+对于包含位域的配置，生成的C++代码如下：
+
+```cpp
+#ifndef RPL_SENSORSTATUS_HPP
+#define RPL_SENSORSTATUS_HPP
+
+#include <cstdint>
+#include <RPL/Meta/PacketTraits.hpp>
+
+struct __attribute__((packed)) SensorStatus
+{
+    uint8_t sensor_id : 4;      // 传感器ID
+    uint8_t status_flag : 3;    // 状态标志
+    uint8_t reserved : 1;       // 保留位
+    float temperature;          // 温度值
+};
+
+template <>
+struct RPL::Meta::PacketTraits<SensorStatus> : PacketTraitsBase<PacketTraits<SensorStatus>>
+{
+    static constexpr uint16_t cmd = 0x0301;
+    static constexpr size_t size = sizeof(SensorStatus);
+};
+
+#endif //RPL_SENSORSTATUS_HPP
+```
+
+## 位域支持
+
+RPLC 支持在结构体中定义位域字段，允许更紧凑地存储数据。位域字段通过 `bit_field` 属性指定，该属性定义了字段占用的位数。
+
+### 位域定义规则
+
+- `bit_field` 属性是可选的，仅当需要定义位域时才使用
+- `bit_field` 的值必须是正整数，且不能超过其基础数据类型的总位数
+- 位域只能用于整数类型（如 `uint8_t`, `int16_t`, `uint32_t` 等）
+- 位域字段不会影响结构体的整体大小验证，但会影响字段在结构体中的布局
+
 ## 验证规则
 
 ### 命令ID验证
@@ -220,6 +295,5 @@ struct RPL::Meta::PacketTraits<Robot::Navigation::RobotPosition> : PacketTraitsB
 
 ## 版本信息
 
-- 规范版本：1.0
+- 规范版本：1.1
 - 兼容RPL版本：0.1+
-- 文档更新日期：2025年

@@ -45,6 +45,35 @@ pub enum ValidationCode {
     )]
     InvalidCommandId(String),
 
+    #[error("'{0}' 的 Type 无效")]
+    #[diagnostic(code(rplc::invalid_field_type), help("请为字段指定合法的C/C++类型"))]
+    InvalidFieldType(String),
+
+    #[error("'{0}' 的位域限定符无效")]
+    #[diagnostic(code(rplc::bit_field::invalid), help("位域限定符应该是正整数"))]
+    InvalidBitField(String),
+
+    #[error("字段 '{0}' 在不允许的变量类型: '{0}' 上添加了位域限定符")]
+    #[diagnostic(
+        code(rplc::bit_field::invalid_type),
+        help("位域字段必须是数字类型，不接受字符串、布尔值或其他类型")
+    )]
+    BitFieldOnInvalidType(String, String),
+
+    #[error("字段 '{0}' 的位域限定符长度: {0} 超过了其类型本身的大小: {0}")]
+    #[diagnostic(
+        code(rplc::bit_field::length_overflow),
+        help("位域限定符长度不能超过其类型本身")
+    )]
+    BitFieldLengthOverflow(String, u8, u8),
+
+    #[error("位域字段 '{0}' 和 '{0}' 存在跨存储单元行为({0} + {0} > {0})，且内存布局非紧凑")]
+    #[diagnostic(
+        code(rplc::bit_field::straddle_boundary_without_packed),
+        help("非紧凑情况下的跨储存单元位域没有意义，请去除位域定义或添加紧凑内存限定符")
+    )]
+    BitFieldStraddleBoundaryWithoutPacked(String, String, u8, u8, u8),
+
     // ---- Warnings ----
     #[error("Packet名称 '{0}' 建议使用大驼峰命名法 (PascalCase)")]
     #[diagnostic(
@@ -69,6 +98,22 @@ pub enum ValidationCode {
         help("添加注释有助于生成文档")
     )]
     MissingComment(String),
+
+    #[error("'{0}' 字段使用位域的同时未启用紧凑结构体")]
+    #[diagnostic(
+        severity(Warning),
+        code(rplc::bit_field::missing_packed_attr),
+        help("使用紧凑结构体能消除位域成员之间的空白填充，避免占用额外空间，提高跨平台兼容性")
+    )]
+    BitFieldMissingPackedAttr(String),
+
+    #[error("'{0} 字段位域跨越了存储单元边界")]
+    #[diagnostic(
+        severity(Warning),
+        code(rplc::bit_field::straddle_boundary),
+        help("位域跨越存储单元边界会增加CPU访问成员的开销")
+    )]
+    BitFieldStraddleBoundary(String),
 }
 
 #[derive(Debug, Clone, Error, Diagnostic, Serialize)]

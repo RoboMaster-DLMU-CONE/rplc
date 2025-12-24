@@ -5,6 +5,8 @@ pub struct Field {
     pub name: String,
     #[serde(rename = "type")]
     pub ty: String,
+    #[serde(rename = "bitfield")]
+    pub bit_field: Option<u8>,
     pub comment: Option<String>,
 }
 
@@ -26,13 +28,13 @@ fn default_packet() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json;
 
     #[test]
     fn test_field_serialization() {
         let field = Field {
             name: "temperature".to_string(),
             ty: "float".to_string(),
+            bit_field: None,
             comment: Some("温度值(摄氏度)".to_string()),
         };
 
@@ -52,6 +54,7 @@ mod tests {
         let field = Field {
             name: "sensor_id".to_string(),
             ty: "uint8_t".to_string(),
+            bit_field: Some(3),
             comment: None,
         };
 
@@ -77,11 +80,13 @@ mod tests {
                 Field {
                     name: "sensor_id".to_string(),
                     ty: "uint8_t".to_string(),
+                    bit_field: Some(3),
                     comment: Some("传感器ID".to_string()),
                 },
                 Field {
                     name: "temperature".to_string(),
                     ty: "float".to_string(),
+                    bit_field: None,
                     comment: Some("温度值(摄氏度)".to_string()),
                 },
             ],
@@ -118,6 +123,7 @@ mod tests {
             fields: vec![Field {
                 name: "robot_id".to_string(),
                 ty: "uint16_t".to_string(),
+                bit_field: None,
                 comment: Some("机器人ID".to_string()),
             }],
         };

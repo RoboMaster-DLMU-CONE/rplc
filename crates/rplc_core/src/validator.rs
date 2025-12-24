@@ -2,9 +2,7 @@ use json_spanned_value as jsv;
 use regex::Regex;
 use std::collections::HashSet;
 
-use crate::{
-    diagnostics::{RplcDiagnostic, Severity, ValidationCode},
-};
+use crate::diagnostics::{RplcDiagnostic, Severity, ValidationCode};
 
 const CPP_KEYWORDS: &[&str] = &[
     "alignas",
@@ -163,12 +161,20 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
             }
         }
 
+        // Packed
+        let mut is_packed = map.get("packed").and_then(|n| n.as_bool()).unwrap_or(true);
+
         // Fields
         if let Some(field_nodes) = map.get("fields") {
             let fields = field_nodes.as_array().unwrap();
             let mut seen_fields = HashSet::new();
 
+            // 存储位域信息用于后续检查
+            let mut bitfield_info: Vec<(String, String, u8, u8)> = Vec::new(); // (field_name, field_type, type_bits, bitfield_bits)
+
             for field_node in fields {
+                let mut field_name: String = "".to_string();
+
                 if let Some(field_map) = field_node.as_object() {
                     if let Some(name_node) = field_map.get("name") {
                         if let Some(name) = name_node.as_string() {
@@ -198,8 +204,127 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
                                     name_node,
                                 );
                             }
+                            field_name = name.to_string();
                         }
                     }
+                    // Type
+                    let mut ty: Option<&str> = None;
+                    if let Some(ty_node) = field_map.get("type") {
+                        if let Some(ty_str) = ty_node.as_string() {
+                            ty = Some(ty_str);
+                        } else {
+                            add_diag(
+                                Severity::Error,
+                                ValidationCode::InvalidFieldType(field_name.clone()),
+                                ty_node,
+                            )
+                        }
+                    } else {
+                        add_diag(
+                            Severity::Error,
+                            ValidationCode::InvalidFieldType(field_name.clone()),
+                            field_node,
+                        )
+                    }
+
+                    // Bit-Field
+                    let has_bitfield = if let Some(bitfield_node) = field_map.get("bitfield") {
+                        // 检查位域值是否为数字
+                        if let Some(bitfield_num) = bitfield_node.as_number() {
+                            // 检查位域值是否为整数
+                            if !bitfield_num.is_i64() {
+                                add_diag(
+                                    Severity::Error,
+                                    ValidationCode::InvalidBitField(field_name.clone()),
+                                    bitfield_node,
+                                );
+                                false
+                            } else if let Some(bitfield_value) = bitfield_num.as_i64() {
+                                // 检查位域值是否为正数
+                                if bitfield_value <= 0 {
+                                    add_diag(
+                                        Severity::Error,
+                                        ValidationCode::InvalidBitField(field_name.clone()),
+                                        bitfield_node,
+                                    );
+                                    false
+                                } else {
+                                    // 检查类型是否支持位域
+                                    if let Some(field_type) = ty {
+                                        let type_size = c_type_to_bitfield_size(field_type);
+                                        if type_size.is_none() {
+                                            add_diag(
+                                                Severity::Error,
+                                                ValidationCode::BitFieldOnInvalidType(
+                                                    field_name.clone(),
+                                                    field_type.to_string(),
+                                                ),
+                                                bitfield_node,
+                                            );
+                                            false
+                                        } else {
+                                            // 检查位域长度是否超过类型本身的大小
+                                            let type_bits = type_size.unwrap() * 8;
+                                            let bitfield_value_u8 = bitfield_value as u8;
+                                            if bitfield_value_u8 > type_bits {
+                                                add_diag(
+                                                    Severity::Error,
+                                                    ValidationCode::BitFieldLengthOverflow(
+                                                        field_name.clone(),
+                                                        bitfield_value_u8,
+                                                        type_bits,
+                                                    ),
+                                                    bitfield_node,
+                                                );
+                                                false
+                                            } else {
+                                                // 记录位域信息用于后续检查
+                                                bitfield_info.push((
+                                                    field_name.clone(),
+                                                    field_type.to_string(),
+                                                    type_bits,
+                                                    bitfield_value_u8,
+                                                ));
+                                                true // 有效的位域
+                                            }
+                                        }
+                                    } else {
+                                        add_diag(
+                                            Severity::Error,
+                                            ValidationCode::InvalidFieldType(field_name.clone()),
+                                            field_node,
+                                        );
+                                        false
+                                    }
+                                }
+                            } else {
+                                add_diag(
+                                    Severity::Error,
+                                    ValidationCode::InvalidBitField(field_name.clone()),
+                                    bitfield_node,
+                                );
+                                false
+                            }
+                        } else {
+                            add_diag(
+                                Severity::Error,
+                                ValidationCode::InvalidBitField(field_name.clone()),
+                                bitfield_node,
+                            );
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    if has_bitfield && !is_packed {
+                        add_diag(
+                            Severity::Warning,
+                            ValidationCode::BitFieldMissingPackedAttr(field_name.clone()),
+                            field_node,
+                        );
+                    }
+
                     // Comment
                     let has_comment = field_map
                         .get("comment")
@@ -221,6 +346,41 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
                     }
                 }
             }
+
+            // 检查跨存储单元边界的位域
+            if !is_packed && bitfield_info.len() > 1 {
+                for i in 1..bitfield_info.len() {
+                    let (prev_field_name, _prev_field_type, _prev_type_bits, prev_bitfield_bits) =
+                        &bitfield_info[i - 1];
+                    let (field_name, _field_type, type_bits, bitfield_bits) = &bitfield_info[i];
+
+                    // 如果前一个位域和当前位域的总和超过类型位数，则存在跨边界问题
+                    if prev_bitfield_bits + bitfield_bits > *type_bits {
+                        add_diag(
+                            Severity::Error,
+                            ValidationCode::BitFieldStraddleBoundaryWithoutPacked(
+                                prev_field_name.clone(),
+                                field_name.clone(),
+                                *prev_bitfield_bits,
+                                *bitfield_bits,
+                                *type_bits,
+                            ),
+                            field_nodes, // 使用整个fields数组作为节点
+                        );
+                    }
+                }
+            }
+
+            // 检查单个位域是否跨越边界
+            for (field_name, field_type, type_bits, bitfield_bits) in &bitfield_info {
+                if *bitfield_bits == *type_bits && !is_packed {
+                    add_diag(
+                        Severity::Warning,
+                        ValidationCode::BitFieldStraddleBoundary(field_name.clone()),
+                        field_nodes, // 使用整个fields数组作为节点
+                    );
+                }
+            }
         }
     }
 
@@ -238,6 +398,29 @@ pub fn parse_command_id(id: &str) -> Result<u16, ()> {
 
 pub fn is_cpp_keyword(name: &str) -> bool {
     CPP_KEYWORDS.contains(&name)
+}
+
+pub fn c_type_to_bitfield_size(ty: &str) -> Option<u8> {
+    match ty {
+        "unsigned int" | "signed int" | "int" => Some(4),
+        "_Bool" | "bool" => Some(1),
+
+        "unsigned char" | "signed char" | "char" => Some(1),
+        "unsigned short" | "signed short" | "short" => Some(2),
+        "unsigned long" | "signed long" | "long" => Some(8),
+        "unsigned long long" | "signed long long" | "long long" => Some(8),
+
+        "uint8_t" | "int8_t" => Some(1),
+        "uint16_t" | "int16_t" => Some(2),
+        "uint32_t" | "int32_t" => Some(4),
+        "uint64_t" | "int64_t" => Some(8),
+
+        "float" | "double" | "long double" => None,
+        "void*" | "char*" | "int*" => None,
+        "struct" | "union" => None,
+
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -360,10 +543,7 @@ mod tests {
 
         let diags = validate(json);
         assert_eq!(diags.len(), 1); // Should have command ID error
-        assert!(matches!(
-            diags[0].code,
-            ValidationCode::InvalidCommandId(_)
-        ));
+        assert!(matches!(diags[0].code, ValidationCode::InvalidCommandId(_)));
         assert_eq!(diags[0].severity, Severity::Error);
     }
 
