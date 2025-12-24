@@ -87,6 +87,52 @@ pub fn generate(json_input: &str) -> Result<String, GenerateError> {
     Ok(out)
 }
 
+// New functionality to support generating multiple packets
+#[derive(Debug, Error)]
+pub enum MultiGenerateError {
+    #[error("JSON解析失败: {0}")]
+    JsonError(#[from] serde_json::Error),
+    #[error("配置验证未通过，请检查错误信息")]
+    ValidationError,
+    #[error("代码生成失败: {0}")]
+    GenerateError(#[from] GenerateError),
+}
+
+pub fn generate_multiple(json_input: &str) -> Result<Vec<(String, String)>, MultiGenerateError> {
+    // Try to parse as a single config first (for backward compatibility)
+    if let Ok(single_config) = serde_json::from_str::<Config>(json_input) {
+        let diags = validate(json_input);
+        for diag in diags {
+            if diag.severity == Severity::Error {
+                return Err(MultiGenerateError::ValidationError);
+            }
+        }
+        let output = generate(json_input)?;
+        return Ok(vec![(single_config.packet_name, output)]);
+    }
+
+    // If single config parsing fails, try to parse as an array of configs
+    let configs: Vec<Config> = serde_json::from_str(json_input)?;
+    let mut results = Vec::new();
+
+    for config in configs {
+        // Create JSON for each individual config to validate
+        let config_json = serde_json::to_string(&config)?;
+        let diags = validate(&config_json);
+        for diag in diags {
+            if diag.severity == Severity::Error {
+                return Err(MultiGenerateError::ValidationError);
+            }
+        }
+
+        // Generate output for this config
+        let output = generate(&config_json)?;
+        results.push((config.packet_name, output));
+    }
+
+    Ok(results)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,5 +475,122 @@ mod tests {
         assert!(!result.contains(" : 7; //"));
         assert!(!result.contains(" : 1; //"));
         assert!(result.contains("static constexpr uint16_t cmd = 0x0305;"));
+    }
+
+    #[test]
+    fn test_generate_multiple_packets() {
+        let json = r#"[
+            {
+                "packet_name": "PacketA",
+                "command_id": "0x0101",
+                "namespace": null,
+                "packed": true,
+                "header_guard": "RPL_PACKETA_HPP",
+                "fields": [
+                    {
+                        "name": "field_a",
+                        "type": "uint8_t",
+                        "comment": "Field A"
+                    }
+                ]
+            },
+            {
+                "packet_name": "PacketB",
+                "command_id": "0x0102",
+                "namespace": "Test::Ns",
+                "packed": false,
+                "header_guard": "RPL_PACKETB_HPP",
+                "fields": [
+                    {
+                        "name": "field_b",
+                        "type": "uint16_t",
+                        "comment": "Field B"
+                    }
+                ]
+            }
+        ]"#;
+
+        let results = generate_multiple(json).unwrap();
+        assert_eq!(results.len(), 2);
+
+        // Check first packet
+        let (name_a, output_a) = &results[0];
+        assert_eq!(name_a, "PacketA");
+        assert!(output_a.contains("#ifndef RPL_PACKETA_HPP"));
+        assert!(output_a.contains("__attribute__((packed)) PacketA"));
+        assert!(output_a.contains("uint8_t field_a; // Field A"));
+
+        // Check second packet
+        let (name_b, output_b) = &results[1];
+        assert_eq!(name_b, "PacketB");
+        assert!(output_b.contains("#ifndef RPL_PACKETB_HPP"));
+        assert!(output_b.contains("namespace Test::Ns {"));
+        assert!(!output_b.contains("__attribute__((packed))")); // packed is false
+        assert!(output_b.contains("uint16_t field_b; // Field B"));
+    }
+
+    #[test]
+    fn test_generate_multiple_packets_with_bit_fields() {
+        let json = r#"[
+            {
+                "packet_name": "BitFieldsPacket",
+                "command_id": "0x0103",
+                "namespace": null,
+                "packed": true,
+                "header_guard": "RPL_BITFIELDSPACKET_HPP",
+                "fields": [
+                    {
+                        "name": "status",
+                        "type": "uint8_t",
+                        "bit_field": 4,
+                        "comment": "Status field"
+                    },
+                    {
+                        "name": "flag",
+                        "type": "uint8_t",
+                        "bit_field": 4,
+                        "comment": "Flag field"
+                    }
+                ]
+            }
+        ]"#;
+
+        let results = generate_multiple(json).unwrap();
+        assert_eq!(results.len(), 1);
+
+        let (name, output) = &results[0];
+        assert_eq!(name, "BitFieldsPacket");
+        assert!(output.contains("#ifndef RPL_BITFIELDSPACKET_HPP"));
+        assert!(output.contains("__attribute__((packed)) BitFieldsPacket"));
+        assert!(output.contains("uint8_t status : 4; // Status field"));
+        assert!(output.contains("uint8_t flag : 4; // Flag field"));
+    }
+
+    #[test]
+    fn test_generate_multiple_backwards_compatibility() {
+        // Test that single packet still works with generate_multiple
+        let json = r#"{
+            "packet_name": "SinglePacket",
+            "command_id": "0x0104",
+            "namespace": null,
+            "packed": true,
+            "header_guard": "RPL_SINGLEPACKET_HPP",
+            "fields": [
+                {
+                    "name": "field",
+                    "type": "uint8_t",
+                    "comment": "A field"
+                }
+            ]
+        }"#;
+
+        let results = generate_multiple(json).unwrap();
+        assert_eq!(results.len(), 1);
+
+        let (name, output) = &results[0];
+        assert_eq!(name, "SinglePacket");
+        assert!(output.contains("#ifndef RPL_SINGLEPACKET_HPP"));
+        assert!(output.contains("__attribute__((packed)) SinglePacket"));
+        assert!(output.contains("uint8_t field; // A field"));
     }
 }

@@ -2,6 +2,7 @@ use json_spanned_value as jsv;
 use regex::Regex;
 use std::collections::HashSet;
 
+use crate::config::Config;
 use crate::diagnostics::{RplcDiagnostic, Severity, ValidationCode};
 
 const CPP_KEYWORDS: &[&str] = &[
@@ -229,8 +230,10 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
 
                     // Bit-Field
                     let has_bit_field = if let Some(bit_field_node) = field_map.get("bit_field") {
-                        // 检查位域值是否为数字
-                        if let Some(bit_field_num) = bit_field_node.as_number() {
+                        // Check if the bit_field value is explicitly null (meaning no bit field)
+                        if bit_field_node.is_null() {
+                            false  // No bit field
+                        } else if let Some(bit_field_num) = bit_field_node.as_number() {
                             // 检查位域值是否为整数
                             if !bit_field_num.is_i64() {
                                 add_diag(
@@ -385,6 +388,33 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
     }
 
     diags
+}
+
+// New functionality to support validating multiple packets
+pub fn validate_multiple(json_input: &str) -> Vec<RplcDiagnostic> {
+    // Try to parse as a single config first (for backward compatibility)
+    if let Ok(_) = serde_json::from_str::<Config>(json_input) {
+        // If it's a single config, validate it normally
+        return validate(json_input);
+    }
+
+    // If single config parsing fails, try to parse as an array of configs
+    if let Ok(configs) = serde_json::from_str::<Vec<Config>>(json_input) {
+        let mut all_diags = Vec::new();
+
+        for config in configs {
+            // Create JSON for each individual config to validate
+            let config_json = serde_json::to_string(&config).unwrap_or_default();
+            let diags = validate(&config_json);
+            all_diags.extend(diags);
+        }
+
+        return all_diags;
+    }
+
+    // If both attempts fail, return an empty diagnostics vector
+    // (since the input is neither a single config nor an array of configs)
+    vec![]
 }
 
 pub fn parse_command_id(id: &str) -> Result<u16, ()> {
@@ -913,5 +943,104 @@ mod tests {
         assert_eq!(c_type_to_bit_field_size("double"), None);
         assert_eq!(c_type_to_bit_field_size("void*"), None);
         assert_eq!(c_type_to_bit_field_size("invalid_type"), None);
+    }
+
+    #[test]
+    fn test_validate_multiple_packets_valid() {
+        let json = r#"[
+            {
+                "packet_name": "PacketA",
+                "command_id": "0x0101",
+                "namespace": null,
+                "packed": true,
+                "header_guard": "RPL_PACKETA_HPP",
+                "fields": [
+                    {
+                        "name": "field_a",
+                        "type": "uint8_t",
+                        "comment": "Field A"
+                    }
+                ]
+            },
+            {
+                "packet_name": "PacketB",
+                "command_id": "0x0102",
+                "namespace": "Test::Ns",
+                "packed": false,
+                "header_guard": "RPL_PACKETB_HPP",
+                "fields": [
+                    {
+                        "name": "field_b",
+                        "type": "uint16_t",
+                        "comment": "Field B"
+                    }
+                ]
+            }
+        ]"#;
+
+        let diags = validate_multiple(json);
+        assert!(diags.is_empty()); // Should have no diagnostics for valid packets
+    }
+
+    #[test]
+    fn test_validate_multiple_packets_with_errors() {
+        let json = r#"[
+            {
+                "packet_name": "ValidPacket",
+                "command_id": "0x0101",
+                "namespace": null,
+                "packed": true,
+                "header_guard": "RPL_VALIDPACKET_HPP",
+                "fields": [
+                    {
+                        "name": "valid_field",
+                        "type": "uint8_t",
+                        "comment": "Valid field"
+                    }
+                ]
+            },
+            {
+                "packet_name": "InvalidPacket",
+                "command_id": "invalid-command-id",
+                "namespace": null,
+                "packed": true,
+                "header_guard": "RPL_INVALIDPACKET_HPP",
+                "fields": [
+                    {
+                        "name": "field",
+                        "type": "uint8_t",
+                        "comment": "Field"
+                    }
+                ]
+            }
+        ]"#;
+
+        let diags = validate_multiple(json);
+        assert!(!diags.is_empty()); // Should have diagnostics because of invalid command ID
+
+        let error_count = diags.iter().filter(|d| d.severity == Severity::Error).count();
+        assert_eq!(error_count, 1); // Should have 1 error for the invalid command ID
+    }
+
+    #[test]
+    fn test_validate_multiple_backwards_compatibility() {
+        // Test that single packet still works with validate_multiple
+        let json = r#"{
+            "packet_name": "SinglePacket",
+            "command_id": "0x0104",
+            "namespace": null,
+            "packed": true,
+            "header_guard": "RPL_SINGLEPACKET_HPP",
+            "fields": [
+                {
+                    "name": "field",
+                    "type": "uint8_t",
+                    "comment": "A field"
+                }
+            ]
+        }"#;
+
+        let diags = validate_multiple(json);
+        assert!(diags.is_empty()); // Should have no diagnostics for valid single packet
     }
 }

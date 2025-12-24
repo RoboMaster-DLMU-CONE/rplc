@@ -24,6 +24,14 @@ fn default_packet() -> bool {
     true
 }
 
+// New functionality to support multiple configurations
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ConfigOrArray {
+    Single(Config),
+    Multiple(Vec<Config>),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
