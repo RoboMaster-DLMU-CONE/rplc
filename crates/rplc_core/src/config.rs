@@ -17,11 +17,17 @@ pub struct Config {
     #[serde(default = "default_packet")]
     pub packed: bool,
     pub header_guard: Option<String>,
+    #[serde(default = "default_comment")]
+    pub comment: Option<String>,
     pub fields: Vec<Field>,
 }
 
 fn default_packet() -> bool {
     true
+}
+
+fn default_comment() -> Option<String> {
+    None
 }
 
 // New functionality to support multiple configurations
@@ -83,6 +89,7 @@ mod tests {
             namespace: None,
             packed: true,
             header_guard: Some("RPL_SENSORDATAPACKET_HPP".to_string()),
+            comment: None,
             fields: vec![
                 Field {
                     name: "sensor_id".to_string(),
@@ -127,6 +134,7 @@ mod tests {
             namespace: Some("Robot::Navigation".to_string()),
             packed: true,
             header_guard: None,
+            comment: None,
             fields: vec![Field {
                 name: "robot_id".to_string(),
                 ty: "uint16_t".to_string(),
@@ -166,6 +174,7 @@ mod tests {
             namespace: None,
             packed: false, // Explicitly set to false
             header_guard: None,
+            comment: None,
             fields: vec![],
         };
 
@@ -219,6 +228,7 @@ mod tests {
             namespace: None,
             packed: true,
             header_guard: Some("RPL_SENSORSTATUS_HPP".to_string()),
+            comment: Some("传感器状态包".to_string()),
             fields: vec![
                 Field {
                     name: "sensor_id".to_string(),
@@ -251,13 +261,62 @@ mod tests {
         assert!(json.contains(r#""bit_field":4"#));
         assert!(json.contains(r#""bit_field":3"#));
         assert!(json.contains(r#""bit_field":1"#));
+        assert!(json.contains(r#""comment":"传感器状态包""#));
 
         let parsed: Config = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.packet_name, "SensorStatus");
+        assert_eq!(parsed.comment, Some("传感器状态包".to_string()));
         assert_eq!(parsed.fields.len(), 4);
         assert_eq!(parsed.fields[0].bit_field, Some(4));
         assert_eq!(parsed.fields[1].bit_field, Some(3));
         assert_eq!(parsed.fields[2].bit_field, Some(1));
         assert_eq!(parsed.fields[3].bit_field, None);
+    }
+
+    #[test]
+    fn test_config_with_packet_comment() {
+        let config = Config {
+            packet_name: "SensorDataPacket".to_string(),
+            command_id: "0x0104".to_string(),
+            namespace: None,
+            packed: true,
+            header_guard: Some("RPL_SENSORDATAPACKET_HPP".to_string()),
+            comment: Some("传感器数据包".to_string()),
+            fields: vec![
+                Field {
+                    name: "sensor_id".to_string(),
+                    ty: "uint8_t".to_string(),
+                    bit_field: None,
+                    comment: Some("传感器ID".to_string()),
+                },
+            ],
+        };
+
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("SensorDataPacket"));
+        assert!(json.contains("传感器数据包"));
+        assert!(json.contains("sensor_id"));
+
+        let parsed: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.packet_name, "SensorDataPacket");
+        assert_eq!(parsed.command_id, "0x0104");
+        assert_eq!(parsed.comment, Some("传感器数据包".to_string()));
+        assert_eq!(parsed.fields.len(), 1);
+        assert_eq!(parsed.fields[0].name, "sensor_id");
+    }
+
+    #[test]
+    fn test_config_without_packet_comment() {
+        // Create JSON without specifying comment field to test default
+        let json = r#"{
+            "packet_name": "TestPacket",
+            "command_id": "0x0101",
+            "namespace": null,
+            "header_guard": null,
+            "fields": []
+        }"#;
+
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.comment, None); // Should default to None
     }
 }

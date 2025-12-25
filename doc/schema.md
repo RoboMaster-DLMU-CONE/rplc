@@ -15,6 +15,7 @@ RPLC（RPL Compiler）是RPL库的包生成工具，通过JSON配置文件生成
   "namespace": null,
   "packed": true,
   "header_guard": "RPL_PACKETNAME_HPP",
+  "comment": "包描述",
   "fields": [
     {
       "name": "field_name",
@@ -36,6 +37,7 @@ RPLC（RPL Compiler）是RPL库的包生成工具，通过JSON配置文件生成
 | `namespace`    | string\|null | ✗  | C++命名空间，null表示全局命名空间                   | `"Robot::Sensors"`, `null` |
 | `header_guard` | string       | ✗  | 头文件保护宏，默认自动生成                          | `"RPL_SENSORDATA_HPP"`     |
 | `packed`       | boolean      | ✗  | 是否添加`__attribute__((packed))`属性，默认true | `true`, `false`            |
+| `comment`      | string       | ✗  | 包注释，为生成的struct添加Doxygen风格的注释            | `"传感器数据包"`             |
 | `fields`       | array        | ✓  | 结构体字段定义数组，至少包含一个字段                     | 见下表                        |
 |
 
@@ -78,6 +80,7 @@ RPLC（RPL Compiler）是RPL库的包生成工具，通过JSON配置文件生成
   "namespace": null,
   "packed": true,
   "header_guard": "RPL_SENSORDATAPACKET_HPP",
+  "comment": "传感器数据包",
   "fields": [
     {
       "name": "sensor_id",
@@ -111,6 +114,7 @@ RPLC（RPL Compiler）是RPL库的包生成工具，通过JSON配置文件生成
   "command_id": "0x0201",
   "namespace": "Robot::Navigation",
   "packed": true,
+  "comment": "机器人位置包",
   "fields": [
     {
       "name": "robot_id",
@@ -149,6 +153,7 @@ RPLC（RPL Compiler）是RPL库的包生成工具，通过JSON配置文件生成
   "command_id": "0x0301",
   "namespace": null,
   "packed": true,
+  "comment": "传感器状态包",
   "fields": [
     {
       "name": "sensor_id",
@@ -188,12 +193,15 @@ RPLC（RPL Compiler）是RPL库的包生成工具，通过JSON配置文件生成
 #include <cstdint>
 #include <RPL/Meta/PacketTraits.hpp>
 
+/**
+ * @brief 传感器数据包
+ */
 struct __attribute__((packed)) SensorDataPacket
 {
-    uint8_t sensor_id;      // 传感器ID
-    float temperature;      // 温度值(摄氏度)
-    float humidity;         // 湿度百分比
-    uint64_t timestamp;     // 时间戳(毫秒)
+    uint8_t sensor_id;      ///< 传感器ID
+    float temperature;      ///< 温度值(摄氏度)
+    float humidity;         ///< 湿度百分比
+    uint64_t timestamp;     ///< 时间戳(毫秒)
 };
 
 template <>
@@ -211,9 +219,16 @@ struct RPL::Meta::PacketTraits<SensorDataPacket> : PacketTraitsBase<PacketTraits
 ```cpp
 namespace Robot::Navigation {
 
+/**
+ * @brief 机器人位置包
+ */
 struct __attribute__((packed)) RobotPosition
 {
-    // ... 字段定义
+    uint16_t robot_id;      ///< 机器人ID
+    double position_x;      ///< X坐标(米)
+    double position_y;      ///< Y坐标(米)
+    float rotation;         ///< 旋转角度(弧度)
+    float speed;            ///< 速度(m/s)
 };
 
 } // namespace Robot::Navigation
@@ -237,10 +252,10 @@ struct RPL::Meta::PacketTraits<Robot::Navigation::RobotPosition> : PacketTraitsB
 
 struct __attribute__((packed)) SensorStatus
 {
-    uint8_t sensor_id : 4;      // 传感器ID
-    uint8_t status_flag : 3;    // 状态标志
-    uint8_t reserved : 1;       // 保留位
-    float temperature;          // 温度值
+    uint8_t sensor_id : 4;      ///< 传感器ID
+    uint8_t status_flag : 3;    ///< 状态标志
+    uint8_t reserved : 1;       ///< 保留位
+    float temperature;          ///< 温度值
 };
 
 template <>

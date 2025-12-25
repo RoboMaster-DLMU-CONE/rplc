@@ -162,8 +162,22 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
             }
         }
 
+        // Comment
+        if let Some(comment_node) = map.get("comment") {
+            if let Some(comment) = comment_node.as_string() {
+                // 检查注释是否为空或只包含空白字符
+                if comment.trim().is_empty() {
+                    add_diag(
+                        Severity::Warning,
+                        ValidationCode::EmptyComment("packet".to_string()),
+                        comment_node,
+                    );
+                }
+            }
+        }
+
         // Packed
-        let mut is_packed = map.get("packed").and_then(|n| n.as_bool()).unwrap_or(true);
+        let is_packed = map.get("packed").and_then(|n| n.as_bool()).unwrap_or(true);
 
         // Fields
         if let Some(field_nodes) = map.get("fields") {
@@ -375,7 +389,7 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
             }
 
             // 检查单个位域是否跨越边界
-            for (field_name, field_type, type_bits, bit_field_bits) in &bit_field_info {
+            for (field_name, _field_type, type_bits, bit_field_bits) in &bit_field_info {
                 if *bit_field_bits == *type_bits && !is_packed {
                     add_diag(
                         Severity::Warning,
@@ -1042,5 +1056,75 @@ mod tests {
 
         let diags = validate_multiple(json);
         assert!(diags.is_empty()); // Should have no diagnostics for valid single packet
+    }
+
+    #[test]
+    fn test_validate_packet_comment() {
+        let json = r#"{
+            "packet_name": "CommentedPacket",
+            "command_id": "0x0104",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "comment": "这是一个带注释的数据包",
+            "fields": [
+                {
+                    "name": "field",
+                    "type": "uint8_t",
+                    "comment": "A field"
+                }
+            ]
+        }"#;
+
+        let diags = validate(json);
+        assert_eq!(diags.len(), 0); // Should have no diagnostics
+    }
+
+    #[test]
+    fn test_validate_empty_packet_comment() {
+        let json = r#"{
+            "packet_name": "EmptyCommentPacket",
+            "command_id": "0x0104",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "comment": "",
+            "fields": [
+                {
+                    "name": "field",
+                    "type": "uint8_t",
+                    "comment": "A field"
+                }
+            ]
+        }"#;
+
+        let diags = validate(json);
+        assert_eq!(diags.len(), 1); // Should have empty comment warning
+        assert!(matches!(diags[0].code, ValidationCode::EmptyComment(_)));
+        assert_eq!(diags[0].severity, Severity::Warning);
+    }
+
+    #[test]
+    fn test_validate_whitespace_packet_comment() {
+        let json = r#"{
+            "packet_name": "WhitespaceCommentPacket",
+            "command_id": "0x0104",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "comment": "   ",
+            "fields": [
+                {
+                    "name": "field",
+                    "type": "uint8_t",
+                    "comment": "A field"
+                }
+            ]
+        }"#;
+
+        let diags = validate(json);
+        assert_eq!(diags.len(), 1); // Should have empty comment warning
+        assert!(matches!(diags[0].code, ValidationCode::EmptyComment(_)));
+        assert_eq!(diags[0].severity, Severity::Warning);
     }
 }

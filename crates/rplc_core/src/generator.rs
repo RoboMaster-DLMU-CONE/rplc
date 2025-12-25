@@ -39,6 +39,11 @@ pub fn generate(json_input: &str) -> Result<String, GenerateError> {
         out.push_str(&format!("namespace {} {{\n\n", ns));
     }
 
+    // Add Doxygen-style comment if provided
+    if let Some(comment) = &config.comment {
+        out.push_str(&format!("/**\n * @brief {}\n */\n", comment));
+    }
+
     let packed = if config.packed {
         "__attribute__((packed)) "
     } else {
@@ -55,7 +60,7 @@ pub fn generate(json_input: &str) -> Result<String, GenerateError> {
             out.push(';');
         }
         if let Some(cmt) = &field.comment {
-            out.push_str(&format!(" // {}", cmt));
+            out.push_str(&format!(" ///< {}", cmt));
         }
         out.push('\n');
     }
@@ -164,8 +169,8 @@ mod tests {
         assert!(result.contains("#ifndef RPL_BASICPACKET_HPP"));
         assert!(result.contains("#define RPL_BASICPACKET_HPP"));
         assert!(result.contains("__attribute__((packed)) BasicPacket"));
-        assert!(result.contains("uint8_t field1; // First field"));
-        assert!(result.contains("float field2; // Second field"));
+        assert!(result.contains("uint8_t field1; ///< First field"));
+        assert!(result.contains("float field2; ///< Second field"));
         assert!(result.contains("static constexpr uint16_t cmd = 0x0104;"));
         assert!(result.contains("static constexpr size_t size = sizeof(BasicPacket)"));
         assert!(result.contains("#endif // RPL_BASICPACKET_HPP"));
@@ -192,7 +197,7 @@ mod tests {
 
         assert!(result.contains("namespace Robot::Sensors {"));
         assert!(result.contains("__attribute__((packed)) NamespacePacket"));
-        assert!(result.contains("uint16_t sensor_id; // Sensor identifier"));
+        assert!(result.contains("uint16_t sensor_id; ///< Sensor identifier"));
         assert!(result.contains("// namespace Robot::Sensors"));
         assert!(result.contains("static constexpr uint16_t cmd = 0xABCD;"));
     }
@@ -219,7 +224,7 @@ mod tests {
         // Should NOT contain packed attribute
         assert!(!result.contains("__attribute__((packed))"));
         assert!(result.contains("struct UnpackedPacket"));
-        assert!(result.contains("int32_t data; // Some data"));
+        assert!(result.contains("int32_t data; ///< Some data"));
         assert!(result.contains("#ifndef RPL_UNPACKEDPACKET_HPP")); // Generated header guard
     }
 
@@ -245,7 +250,7 @@ mod tests {
         // Should generate default header guard based on packet name
         assert!(result.contains("#ifndef RPL_DEFAULTGUARDPACKET_HPP"));
         assert!(result.contains("#define RPL_DEFAULTGUARDPACKET_HPP"));
-        assert!(result.contains("double value; // A double value"));
+        assert!(result.contains("double value; ///< A double value"));
     }
 
     #[test]
@@ -271,7 +276,7 @@ mod tests {
         assert!(result.contains("uint32_t no_comment_field;")); // No comment present
         // The trait comment lines will still be present, just not field comments
         // Let's check specifically for field comments
-        assert!(!result.contains("uint32_t no_comment_field; //")); // No field comment
+        assert!(!result.contains("uint32_t no_comment_field; ///<")); // No field comment
     }
 
     #[test]
@@ -389,10 +394,10 @@ mod tests {
 
         assert!(result.contains("#ifndef RPL_BITFIELDPACKET_HPP"));
         assert!(result.contains("__attribute__((packed)) BitFieldPacket"));
-        assert!(result.contains("uint8_t status : 4; // Status field"));
-        assert!(result.contains("uint8_t flag : 3; // Flag field"));
-        assert!(result.contains("uint8_t reserved : 1; // Reserved bit"));
-        assert!(result.contains("uint16_t normal_field; // Normal field without bit field"));
+        assert!(result.contains("uint8_t status : 4; ///< Status field"));
+        assert!(result.contains("uint8_t flag : 3; ///< Flag field"));
+        assert!(result.contains("uint8_t reserved : 1; ///< Reserved bit"));
+        assert!(result.contains("uint16_t normal_field; ///< Normal field without bit field"));
         assert!(result.contains("static constexpr uint16_t cmd = 0x0105;"));
     }
 
@@ -429,9 +434,9 @@ mod tests {
 
         assert!(result.contains("namespace Robot::Controls {"));
         assert!(!result.contains("__attribute__((packed))")); // packed is false
-        assert!(result.contains("uint8_t cmd_type : 6; // Command type"));
-        assert!(result.contains("uint8_t priority : 2; // Priority level"));
-        assert!(result.contains("uint32_t data; // Data payload"));
+        assert!(result.contains("uint8_t cmd_type : 6; ///< Command type"));
+        assert!(result.contains("uint8_t priority : 2; ///< Priority level"));
+        assert!(result.contains("uint32_t data; ///< Data payload"));
         assert!(result.contains("// namespace Robot::Controls"));
         assert!(result.contains("static constexpr uint16_t cmd = 0x0205;"));
     }
@@ -518,7 +523,7 @@ mod tests {
         assert_eq!(name_a, "PacketA");
         assert!(output_a.contains("#ifndef RPL_PACKETA_HPP"));
         assert!(output_a.contains("__attribute__((packed)) PacketA"));
-        assert!(output_a.contains("uint8_t field_a; // Field A"));
+        assert!(output_a.contains("uint8_t field_a; ///< Field A"));
 
         // Check second packet
         let (name_b, output_b) = &results[1];
@@ -526,7 +531,7 @@ mod tests {
         assert!(output_b.contains("#ifndef RPL_PACKETB_HPP"));
         assert!(output_b.contains("namespace Test::Ns {"));
         assert!(!output_b.contains("__attribute__((packed))")); // packed is false
-        assert!(output_b.contains("uint16_t field_b; // Field B"));
+        assert!(output_b.contains("uint16_t field_b; ///< Field B"));
     }
 
     #[test]
@@ -562,8 +567,8 @@ mod tests {
         assert_eq!(name, "BitFieldsPacket");
         assert!(output.contains("#ifndef RPL_BITFIELDSPACKET_HPP"));
         assert!(output.contains("__attribute__((packed)) BitFieldsPacket"));
-        assert!(output.contains("uint8_t status : 4; // Status field"));
-        assert!(output.contains("uint8_t flag : 4; // Flag field"));
+        assert!(output.contains("uint8_t status : 4; ///< Status field"));
+        assert!(output.contains("uint8_t flag : 4; ///< Flag field"));
     }
 
     #[test]
@@ -591,6 +596,6 @@ mod tests {
         assert_eq!(name, "SinglePacket");
         assert!(output.contains("#ifndef RPL_SINGLEPACKET_HPP"));
         assert!(output.contains("__attribute__((packed)) SinglePacket"));
-        assert!(output.contains("uint8_t field; // A field"));
+        assert!(output.contains("uint8_t field; ///< A field"));
     }
 }

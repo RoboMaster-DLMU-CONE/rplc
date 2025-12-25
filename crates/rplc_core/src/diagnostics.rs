@@ -114,6 +114,14 @@ pub enum ValidationCode {
         help("位域跨越存储单元边界会增加CPU访问成员的开销")
     )]
     BitFieldStraddleBoundary(String),
+
+    #[error("包 '{0}' 的注释为空")]
+    #[diagnostic(
+        severity(Warning),
+        code(rplc::doc::empty_comment),
+        help("注释不应为空，请添加有意义的描述")
+    )]
+    EmptyComment(String),
 }
 
 #[derive(Debug, Clone, Error, Diagnostic, Serialize)]
@@ -293,6 +301,28 @@ mod tests {
         assert_eq!(
             warning_diag.code,
             ValidationCode::BitFieldMissingPackedAttr("warn_field".to_string())
+        );
+    }
+
+    #[test]
+    fn test_validation_code_empty_comment() {
+        assert_eq!(
+            ValidationCode::EmptyComment("test_packet".to_string()).to_string(),
+            "包 'test_packet' 的注释为空"
+        );
+    }
+
+    #[test]
+    fn test_rplc_diagnostic_with_empty_comment() {
+        let warning_diag = RplcDiagnostic {
+            code: ValidationCode::EmptyComment("test_packet".to_string()),
+            severity: Severity::Warning,
+            span: Some((0, 5)),
+        };
+        assert_eq!(warning_diag.severity, Severity::Warning);
+        assert_eq!(
+            warning_diag.code,
+            ValidationCode::EmptyComment("test_packet".to_string())
         );
     }
 }
