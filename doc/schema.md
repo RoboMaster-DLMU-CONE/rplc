@@ -196,13 +196,13 @@ RPLC（RPL Compiler）是RPL库的包生成工具，通过JSON配置文件生成
 /**
  * @brief 传感器数据包
  */
-struct __attribute__((packed)) SensorDataPacket
+struct SensorDataPacket
 {
     uint8_t sensor_id;      ///< 传感器ID
     float temperature;      ///< 温度值(摄氏度)
     float humidity;         ///< 湿度百分比
     uint64_t timestamp;     ///< 时间戳(毫秒)
-};
+} __attribute__((packed));
 
 template <>
 struct RPL::Meta::PacketTraits<SensorDataPacket> : PacketTraitsBase<PacketTraits<SensorDataPacket>>
@@ -222,14 +222,14 @@ namespace Robot::Navigation {
 /**
  * @brief 机器人位置包
  */
-struct __attribute__((packed)) RobotPosition
+struct RobotPosition
 {
     uint16_t robot_id;      ///< 机器人ID
     double position_x;      ///< X坐标(米)
     double position_y;      ///< Y坐标(米)
     float rotation;         ///< 旋转角度(弧度)
     float speed;            ///< 速度(m/s)
-};
+} __attribute__((packed));
 
 } // namespace Robot::Navigation
 
@@ -250,13 +250,13 @@ struct RPL::Meta::PacketTraits<Robot::Navigation::RobotPosition> : PacketTraitsB
 #include <cstdint>
 #include <RPL/Meta/PacketTraits.hpp>
 
-struct __attribute__((packed)) SensorStatus
+struct SensorStatus
 {
     uint8_t sensor_id : 4;      ///< 传感器ID
     uint8_t status_flag : 3;    ///< 状态标志
     uint8_t reserved : 1;       ///< 保留位
     float temperature;          ///< 温度值
-};
+} __attribute__((packed));
 
 template <>
 struct RPL::Meta::PacketTraits<SensorStatus> : PacketTraitsBase<PacketTraits<SensorStatus>>

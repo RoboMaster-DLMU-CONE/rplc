@@ -43,13 +43,7 @@ pub fn generate(json_input: &str) -> Result<String, GenerateError> {
     if let Some(comment) = &config.comment {
         out.push_str(&format!("/**\n * @brief {}\n */\n", comment));
     }
-
-    let packed = if config.packed {
-        "__attribute__((packed)) "
-    } else {
-        ""
-    };
-    out.push_str(&format!("struct {}{}\n{{\n", packed, config.packet_name));
+    out.push_str(&format!("struct {}\n{{\n", config.packet_name));
 
     // Fields
     for field in &config.fields {
@@ -64,7 +58,14 @@ pub fn generate(json_input: &str) -> Result<String, GenerateError> {
         }
         out.push('\n');
     }
-    out.push_str("};\n\n");
+
+    let packed = if config.packed {
+        "__attribute__((packed))"
+    } else {
+        ""
+    };
+
+    out.push_str(&format!("}} {};\n\n", packed));
 
     // Traits
     out.push_str("template <>\n");
@@ -168,7 +169,8 @@ mod tests {
 
         assert!(result.contains("#ifndef RPL_BASICPACKET_HPP"));
         assert!(result.contains("#define RPL_BASICPACKET_HPP"));
-        assert!(result.contains("__attribute__((packed)) BasicPacket"));
+        assert!(result.contains("struct BasicPacket"));
+        assert!(result.contains("} __attribute__((packed));"));
         assert!(result.contains("uint8_t field1; ///< First field"));
         assert!(result.contains("float field2; ///< Second field"));
         assert!(result.contains("static constexpr uint16_t cmd = 0x0104;"));
@@ -196,7 +198,8 @@ mod tests {
         let result = generate(json).unwrap();
 
         assert!(result.contains("namespace Robot::Sensors {"));
-        assert!(result.contains("__attribute__((packed)) NamespacePacket"));
+        assert!(result.contains("struct NamespacePacket"));
+        assert!(result.contains("} __attribute__((packed))"));
         assert!(result.contains("uint16_t sensor_id; ///< Sensor identifier"));
         assert!(result.contains("// namespace Robot::Sensors"));
         assert!(result.contains("static constexpr uint16_t cmd = 0xABCD;"));
@@ -393,7 +396,8 @@ mod tests {
         let result = generate(json).unwrap();
 
         assert!(result.contains("#ifndef RPL_BITFIELDPACKET_HPP"));
-        assert!(result.contains("__attribute__((packed)) BitFieldPacket"));
+        assert!(result.contains("struct BitFieldPacket"));
+        assert!(result.contains("} __attribute__((packed))"));
         assert!(result.contains("uint8_t status : 4; ///< Status field"));
         assert!(result.contains("uint8_t flag : 3; ///< Flag field"));
         assert!(result.contains("uint8_t reserved : 1; ///< Reserved bit"));
@@ -471,7 +475,8 @@ mod tests {
         let result = generate(json).unwrap();
 
         assert!(result.contains("#ifndef RPL_BITFIELDSNOCOMMENTS_HPP"));
-        assert!(result.contains("__attribute__((packed)) BitFieldsNoComments"));
+        assert!(result.contains("struct BitFieldsNoComments"));
+        assert!(result.contains("} __attribute__((packed))"));
         assert!(result.contains("uint16_t field1 : 8;"));
         assert!(result.contains("uint16_t field2 : 7;"));
         assert!(result.contains("uint16_t field3 : 1;"));
@@ -522,7 +527,8 @@ mod tests {
         let (name_a, output_a) = &results[0];
         assert_eq!(name_a, "PacketA");
         assert!(output_a.contains("#ifndef RPL_PACKETA_HPP"));
-        assert!(output_a.contains("__attribute__((packed)) PacketA"));
+        assert!(output_a.contains("struct PacketA"));
+        assert!(output_a.contains("} __attribute__((packed))"));
         assert!(output_a.contains("uint8_t field_a; ///< Field A"));
 
         // Check second packet
@@ -566,7 +572,8 @@ mod tests {
         let (name, output) = &results[0];
         assert_eq!(name, "BitFieldsPacket");
         assert!(output.contains("#ifndef RPL_BITFIELDSPACKET_HPP"));
-        assert!(output.contains("__attribute__((packed)) BitFieldsPacket"));
+        assert!(output.contains("struct BitFieldsPacket"));
+        assert!(output.contains("} __attribute__((packed))"));
         assert!(output.contains("uint8_t status : 4; ///< Status field"));
         assert!(output.contains("uint8_t flag : 4; ///< Flag field"));
     }
@@ -595,7 +602,8 @@ mod tests {
         let (name, output) = &results[0];
         assert_eq!(name, "SinglePacket");
         assert!(output.contains("#ifndef RPL_SINGLEPACKET_HPP"));
-        assert!(output.contains("__attribute__((packed)) SinglePacket"));
+        assert!(output.contains("struct SinglePacket"));
+        assert!(output.contains("} __attribute__((packed))"));
         assert!(output.contains("uint8_t field; ///< A field"));
     }
 }
