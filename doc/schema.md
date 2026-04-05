@@ -50,6 +50,34 @@ RPLC（RPL Compiler）是RPL库的包生成工具，通过JSON配置文件生成
 | `bit_field`| number | ✗  | 位域宽度，指定该字段占用的位数  | `3`             |
 | `comment` | string | ✗  | 字段注释，支持中英文        | `"温度值(摄氏度)"`    |
 
+### 数组类型支持
+
+RPLC 支持在字段中定义数组类型，通过在类型后添加 `[N]` 格式来指定固定大小的数组。
+
+#### 数组类型格式
+
+```json
+{
+  "name": "temperature",
+  "type": "float[3]",
+  "comment": "温度值(摄氏度)"
+}
+```
+
+生成的C++代码：
+
+```cpp
+float temperature[3]; ///< 温度值(摄氏度)
+```
+
+#### 数组类型规则
+
+- 数组格式为 `基础类型[大小]`，其中大小必须是正整数
+- ✅ 合法格式: `float[3]`, `uint8_t[10]`, `int32_t[256]`
+- ❌ 非法格式: `float[]`（缺少大小）, `float[0]`（零大小）, `float[-1]`（负数）, `float[abc]`（非数字）
+- 数组的基础类型必须是支持的C++类型
+- 数组字段不能使用位域限定符（`bit_field`）
+
 ### 支持的数据类型
 
 #### 整数类型
@@ -182,6 +210,45 @@ RPLC（RPL Compiler）是RPL库的包生成工具，通过JSON配置文件生成
 }
 ```
 
+### 示例4：带数组字段的传感器数据包
+
+```json
+{
+  "packet_name": "MultiSensorData",
+  "command_id": "0x0401",
+  "namespace": "Robot::Sensors",
+  "packed": true,
+  "comment": "多传感器数据包",
+  "fields": [
+    {
+      "name": "sensor_id",
+      "type": "uint8_t",
+      "comment": "传感器ID"
+    },
+    {
+      "name": "temperature",
+      "type": "float[3]",
+      "comment": "温度值(摄氏度)"
+    },
+    {
+      "name": "humidity",
+      "type": "float",
+      "comment": "湿度百分比"
+    },
+    {
+      "name": "raw_data",
+      "type": "uint16_t[8]",
+      "comment": "原始数据数组"
+    },
+    {
+      "name": "timestamp",
+      "type": "uint64_t",
+      "comment": "时间戳(毫秒)"
+    }
+  ]
+}
+```
+
 ## 生成的代码结构
 
 使用上述配置会生成如下格式的C++头文件：
@@ -268,6 +335,41 @@ struct RPL::Meta::PacketTraits<SensorStatus> : PacketTraitsBase<PacketTraits<Sen
 #endif //RPL_SENSORSTATUS_HPP
 ```
 
+对于包含数组字段的配置，生成的C++代码如下：
+
+```cpp
+#ifndef RPL_MULTISENSORDATA_HPP
+#define RPL_MULTISENSORDATA_HPP
+
+#include <cstdint>
+#include <RPL/Meta/PacketTraits.hpp>
+
+namespace Robot::Sensors {
+
+/**
+ * @brief 多传感器数据包
+ */
+struct MultiSensorData
+{
+    uint8_t sensor_id;          ///< 传感器ID
+    float temperature[3];       ///< 温度值(摄氏度)
+    float humidity;             ///< 湿度百分比
+    uint16_t raw_data[8];       ///< 原始数据数组
+    uint64_t timestamp;         ///< 时间戳(毫秒)
+} __attribute__((packed));
+
+} // namespace Robot::Sensors
+
+template <>
+struct RPL::Meta::PacketTraits<Robot::Sensors::MultiSensorData> : PacketTraitsBase<PacketTraits<Robot::Sensors::MultiSensorData>>
+{
+    static constexpr uint16_t cmd = 0x0401;
+    static constexpr size_t size = sizeof(Robot::Sensors::MultiSensorData);
+};
+
+#endif //RPL_MULTISENSORDATA_HPP
+```
+
 ## 位域支持
 
 RPLC 支持在结构体中定义位域字段，允许更紧凑地存储数据。位域字段通过 `bit_field` 属性指定，该属性定义了字段占用的位数。
@@ -297,18 +399,46 @@ RPLC 支持在结构体中定义位域字段，允许更紧凑地存储数据。
 
 ## 使用rplc工具
 
+### 命令行用法
+
 ```bash
-# 基本用法
-./rplc generate config.json
+# 基本用法 - 从 JSON 配置生成 C++ 头文件
+./rplc config.json
 
 # 指定输出目录
-./rplc generate config.json --output ./generated/
+./rplc config.json --output ./generated/
 
-# 验证配置文件
-./rplc validate config.json
+# 多包模式 - 生成多个独立的头文件
+./rplc config.json --output ./generated/ --multi
 ```
+
+### 配置文件格式
+
+单包配置（单个 JSON 对象）：
+```json
+{
+  "packet_name": "PacketA",
+  "command_id": "0x0101",
+  "fields": [...]
+}
+```
+
+多包配置（JSON 数组），使用 `--multi` 参数时会为每个包生成单独的文件：
+```json
+[
+  { "packet_name": "PacketA", "command_id": "0x0101", "fields": [...] },
+  { "packet_name": "PacketB", "command_id": "0x0102", "fields": [...] }
+]
+```
+
+### 输出说明
+
+- 默认输出文件与输入文件同名，扩展名改为 `.hpp`
+- 使用 `--output` 参数可以指定输出目录
+- 多包模式下每个包会生成一个独立的 `.hpp` 文件
 
 ## 版本信息
 
-- 规范版本：1.1
+- 规范版本：1.2
 - 兼容RPL版本：0.1+
+- 新增特性：数组类型字段支持（`float[3]`, `uint8_t[10]` 等）
