@@ -5,6 +5,47 @@ use std::collections::HashSet;
 use crate::config::Config;
 use crate::diagnostics::{RplcDiagnostic, Severity, ValidationCode};
 
+/// 解析数组类型，返回 (基础类型, 数组大小)
+/// 例如: "float[3]" -> Some(("float", Some(3)))
+///       "uint8_t" -> Some(("uint8_t", None))
+///       "float[]" -> None (无效格式)
+pub fn parse_array_type(ty: &str) -> Option<(&str, Option<u32>)> {
+    // 检查是否包含 '['
+    if let Some(bracket_pos) = ty.find('[') {
+        let base_type = &ty[..bracket_pos];
+        if base_type.is_empty() {
+            return None;
+        }
+
+        // 查找 ']'
+        if !ty.ends_with(']') {
+            return None;
+        }
+
+        let size_str = &ty[bracket_pos + 1..ty.len() - 1];
+        if size_str.is_empty() {
+            // "Type[]" - 无效格式
+            return None;
+        }
+
+        // 解析数组大小
+        match size_str.parse::<u32>() {
+            Ok(size) if size > 0 => Some((base_type, Some(size))),
+            _ => None, // 无效的数字
+        }
+    } else {
+        // 非数组类型
+        Some((ty, None))
+    }
+}
+
+/// 获取数组类型的基础类型
+/// 例如: "float[3]" -> "float"
+///       "uint8_t" -> "uint8_t"
+pub fn get_array_base_type(ty: &str) -> Option<&str> {
+    parse_array_type(ty).map(|(base, _)| base)
+}
+
 const CPP_KEYWORDS: &[&str] = &[
     "alignas",
     "alignof",
@@ -224,9 +265,35 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
                     }
                     // Type
                     let mut ty: Option<&str> = None;
+                    let mut is_array_type = false;
                     if let Some(ty_node) = field_map.get("type") {
                         if let Some(ty_str) = ty_node.as_string() {
-                            ty = Some(ty_str);
+                            // 解析数组类型
+                            if let Some((base_type, arr_size)) = parse_array_type(ty_str) {
+                                // 验证基础类型是否有效
+                                let base_type_valid = c_type_to_bit_field_size(base_type).is_some() 
+                                    || matches!(base_type, "float" | "double" | "long double");
+                                
+                                if !base_type_valid {
+                                    add_diag(
+                                        Severity::Error,
+                                        ValidationCode::InvalidFieldType(field_name.clone()),
+                                        ty_node,
+                                    );
+                                }
+                                
+                                ty = Some(ty_str);
+                                if arr_size.is_some() {
+                                    is_array_type = true;
+                                }
+                            } else {
+                                // 数组格式无效
+                                add_diag(
+                                    Severity::Error,
+                                    ValidationCode::InvalidArrayType(field_name.clone()),
+                                    ty_node,
+                                );
+                            }
                         } else {
                             add_diag(
                                 Severity::Error,
@@ -242,10 +309,19 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
                         )
                     }
 
-                    // Bit-Field
+                    // Bit-Field - 数组类型不允许使用位域
                     let has_bit_field = if let Some(bit_field_node) = field_map.get("bit_field") {
+                        // 检查是否为数组类型
+                        if is_array_type {
+                            add_diag(
+                                Severity::Error,
+                                ValidationCode::BitFieldOnArray(field_name.clone()),
+                                bit_field_node,
+                            );
+                            false
+                        }
                         // Check if the bit_field value is explicitly null (meaning no bit field)
-                        if bit_field_node.is_null() {
+                        else if bit_field_node.is_null() {
                             false  // No bit field
                         } else if let Some(bit_field_num) = bit_field_node.as_number() {
                             // 检查位域值是否为整数
@@ -268,7 +344,14 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
                                 } else {
                                     // 检查类型是否支持位域
                                     if let Some(field_type) = ty {
-                                        let type_size = c_type_to_bit_field_size(field_type);
+                                        // 对于数组类型，使用基础类型检查位域
+                                        let type_to_check = if is_array_type {
+                                            get_array_base_type(field_type).unwrap_or(field_type)
+                                        } else {
+                                            field_type
+                                        };
+                                        
+                                        let type_size = c_type_to_bit_field_size(type_to_check);
                                         if type_size.is_none() {
                                             add_diag(
                                                 Severity::Error,
@@ -1126,5 +1209,155 @@ mod tests {
         assert_eq!(diags.len(), 1); // Should have empty comment warning
         assert!(matches!(diags[0].code, ValidationCode::EmptyComment(_)));
         assert_eq!(diags[0].severity, Severity::Warning);
+    }
+
+    // ---- Array Type Tests ----
+
+    #[test]
+    fn test_parse_array_type_valid() {
+        assert_eq!(parse_array_type("float[3]"), Some(("float", Some(3))));
+        assert_eq!(parse_array_type("uint8_t[10]"), Some(("uint8_t", Some(10))));
+        assert_eq!(parse_array_type("int[256]"), Some(("int", Some(256))));
+        assert_eq!(parse_array_type("double[1]"), Some(("double", Some(1))));
+    }
+
+    #[test]
+    fn test_parse_array_type_non_array() {
+        assert_eq!(parse_array_type("float"), Some(("float", None)));
+        assert_eq!(parse_array_type("uint8_t"), Some(("uint8_t", None)));
+        assert_eq!(parse_array_type("int"), Some(("int", None)));
+    }
+
+    #[test]
+    fn test_parse_array_type_invalid() {
+        // Empty size
+        assert_eq!(parse_array_type("float[]"), None);
+        // Invalid size
+        assert_eq!(parse_array_type("float[abc]"), None);
+        // Negative size
+        assert_eq!(parse_array_type("float[-1]"), None);
+        // Zero size
+        assert_eq!(parse_array_type("float[0]"), None);
+        // Missing closing bracket
+        assert_eq!(parse_array_type("float[3"), None);
+        // Empty base type
+        assert_eq!(parse_array_type("[3]"), None);
+    }
+
+    #[test]
+    fn test_validate_valid_array_type() {
+        let json = r#"{
+            "packet_name": "ArrayPacket",
+            "command_id": "0x0104",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "fields": [
+                {
+                    "name": "temperature",
+                    "type": "float[3]",
+                    "comment": "温度数组"
+                },
+                {
+                    "name": "data",
+                    "type": "uint8_t[8]",
+                    "comment": "数据数组"
+                }
+            ]
+        }"#;
+
+        let diags = validate(json);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn test_validate_invalid_array_format() {
+        let json = r#"{
+            "packet_name": "InvalidArrayPacket",
+            "command_id": "0x0104",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "fields": [
+                {
+                    "name": "bad_array",
+                    "type": "float[]",
+                    "comment": "无效数组"
+                }
+            ]
+        }"#;
+
+        let diags = validate(json);
+        assert_eq!(diags.len(), 1);
+        assert!(matches!(diags[0].code, ValidationCode::InvalidArrayType(_)));
+        assert_eq!(diags[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn test_validate_array_invalid_base_type() {
+        let json = r#"{
+            "packet_name": "InvalidBaseTypePacket",
+            "command_id": "0x0104",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "fields": [
+                {
+                    "name": "bad_base",
+                    "type": "invalid_type[3]",
+                    "comment": "无效基础类型"
+                }
+            ]
+        }"#;
+
+        let diags = validate(json);
+        assert_eq!(diags.len(), 1);
+        assert!(matches!(diags[0].code, ValidationCode::InvalidFieldType(_)));
+        assert_eq!(diags[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn test_validate_array_with_bitfield_error() {
+        let json = r#"{
+            "packet_name": "ArrayBitFieldPacket",
+            "command_id": "0x0104",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "fields": [
+                {
+                    "name": "array_field",
+                    "type": "uint8_t[3]",
+                    "bit_field": 4,
+                    "comment": "数组位域"
+                }
+            ]
+        }"#;
+
+        let diags = validate(json);
+        assert_eq!(diags.len(), 1);
+        assert!(matches!(diags[0].code, ValidationCode::BitFieldOnArray(_)));
+        assert_eq!(diags[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn test_validate_array_valid_with_valid_base_types() {
+        // 测试各种支持的数组类型
+        let json = r#"{
+            "packet_name": "ValidArraysPacket",
+            "command_id": "0x0104",
+            "namespace": null,
+            "packed": true,
+            "header_guard": null,
+            "fields": [
+                { "name": "float_arr", "type": "float[3]", "comment": "浮点数组" },
+                { "name": "double_arr", "type": "double[2]", "comment": "双精度数组" },
+                { "name": "uint8_arr", "type": "uint8_t[16]", "comment": "8位无符号数组" },
+                { "name": "int32_arr", "type": "int32_t[8]", "comment": "32位有符号数组" }
+            ]
+        }"#;
+
+        let diags = validate(json);
+        assert!(diags.is_empty());
     }
 }

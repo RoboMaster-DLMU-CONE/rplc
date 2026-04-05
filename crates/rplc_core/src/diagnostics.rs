@@ -74,6 +74,20 @@ pub enum ValidationCode {
     )]
     BitFieldStraddleBoundaryWithoutPacked(String, String, u8, u8, u8),
 
+    #[error("字段 '{0}' 的数组格式无效")]
+    #[diagnostic(
+        code(rplc::invalid_array_type),
+        help("数组格式应为 'Type[N]'，其中 N 为正整数，例如 'float[3]'")
+    )]
+    InvalidArrayType(String),
+
+    #[error("数组字段 '{0}' 不能使用位域限定符")]
+    #[diagnostic(
+        code(rplc::bit_field_on_array),
+        help("位域限定符仅适用于标量类型，不适用于数组")
+    )]
+    BitFieldOnArray(String),
+
     // ---- Warnings ----
     #[error("Packet名称 '{0}' 建议使用大驼峰命名法 (PascalCase)")]
     #[diagnostic(
@@ -323,6 +337,46 @@ mod tests {
         assert_eq!(
             warning_diag.code,
             ValidationCode::EmptyComment("test_packet".to_string())
+        );
+    }
+
+    #[test]
+    fn test_validation_code_array_type_errors() {
+        // Test InvalidArrayType error message
+        assert_eq!(
+            ValidationCode::InvalidArrayType("bad_field".to_string()).to_string(),
+            "字段 'bad_field' 的数组格式无效"
+        );
+        
+        // Test BitFieldOnArray error message
+        assert_eq!(
+            ValidationCode::BitFieldOnArray("array_field".to_string()).to_string(),
+            "数组字段 'array_field' 不能使用位域限定符"
+        );
+    }
+
+    #[test]
+    fn test_rplc_diagnostic_with_array_type_codes() {
+        let invalid_array_diag = RplcDiagnostic {
+            code: ValidationCode::InvalidArrayType("bad_array".to_string()),
+            severity: Severity::Error,
+            span: Some((0, 10)),
+        };
+        assert_eq!(invalid_array_diag.severity, Severity::Error);
+        assert_eq!(
+            invalid_array_diag.code,
+            ValidationCode::InvalidArrayType("bad_array".to_string())
+        );
+
+        let bitfield_on_array_diag = RplcDiagnostic {
+            code: ValidationCode::BitFieldOnArray("array_field".to_string()),
+            severity: Severity::Error,
+            span: Some((15, 25)),
+        };
+        assert_eq!(bitfield_on_array_diag.severity, Severity::Error);
+        assert_eq!(
+            bitfield_on_array_diag.code,
+            ValidationCode::BitFieldOnArray("array_field".to_string())
         );
     }
 }

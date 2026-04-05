@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::diagnostics::Severity;
-use crate::validator::{parse_command_id, validate};
+use crate::validator::{parse_command_id, validate, parse_array_type};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -47,7 +47,20 @@ pub fn generate(json_input: &str) -> Result<String, GenerateError> {
 
     // Fields
     for field in &config.fields {
-        out.push_str(&format!("    {} {}", field.ty, field.name));
+        // 解析数组类型
+        if let Some((base_type, arr_size)) = parse_array_type(&field.ty) {
+            if let Some(size) = arr_size {
+                // 数组类型: type name[size];
+                out.push_str(&format!("    {} {}[{}]", base_type, field.name, size));
+            } else {
+                // 非数组类型: type name;
+                out.push_str(&format!("    {} {}", field.ty, field.name));
+            }
+        } else {
+            // 解析失败，使用原始类型
+            out.push_str(&format!("    {} {}", field.ty, field.name));
+        }
+        
         if let Some(bf) = field.bit_field {
             out.push_str(&format!(" : {};", bf));
         } else {
@@ -605,5 +618,133 @@ mod tests {
         assert!(output.contains("struct SinglePacket"));
         assert!(output.contains("} __attribute__((packed))"));
         assert!(output.contains("uint8_t field; ///< A field"));
+    }
+
+    // ---- Array Type Tests ----
+
+    #[test]
+    fn test_generate_with_array_fields() {
+        let json = r#"{
+            "packet_name": "ArrayPacket",
+            "command_id": "0x0104",
+            "namespace": null,
+            "packed": true,
+            "header_guard": "RPL_ARRAYPACKET_HPP",
+            "fields": [
+                {
+                    "name": "temperature",
+                    "type": "float[3]",
+                    "comment": "温度值(摄氏度)"
+                },
+                {
+                    "name": "data",
+                    "type": "uint8_t[8]",
+                    "comment": "数据数组"
+                },
+                {
+                    "name": "single_field",
+                    "type": "uint16_t",
+                    "comment": "单值字段"
+                }
+            ]
+        }"#;
+
+        let result = generate(json).unwrap();
+
+        assert!(result.contains("float temperature[3]; ///< 温度值(摄氏度)"));
+        assert!(result.contains("uint8_t data[8]; ///< 数据数组"));
+        assert!(result.contains("uint16_t single_field; ///< 单值字段"));
+        assert!(result.contains("struct ArrayPacket"));
+    }
+
+    #[test]
+    fn test_generate_with_array_and_namespace() {
+        let json = r#"{
+            "packet_name": "NamespaceArrayPacket",
+            "command_id": "0x0204",
+            "namespace": "Robot::Sensors",
+            "packed": true,
+            "header_guard": "RPL_NAMESPACEARRAYPACKET_HPP",
+            "fields": [
+                {
+                    "name": "sensor_data",
+                    "type": "int32_t[4]",
+                    "comment": "传感器数据数组"
+                }
+            ]
+        }"#;
+
+        let result = generate(json).unwrap();
+
+        assert!(result.contains("namespace Robot::Sensors {"));
+        assert!(result.contains("int32_t sensor_data[4]; ///< 传感器数据数组"));
+        assert!(result.contains("// namespace Robot::Sensors"));
+        assert!(result.contains("struct NamespaceArrayPacket"));
+    }
+
+    #[test]
+    fn test_generate_with_mixed_array_and_bitfield() {
+        let json = r#"{
+            "packet_name": "MixedArrayBitFieldPacket",
+            "command_id": "0x0304",
+            "namespace": null,
+            "packed": true,
+            "header_guard": "RPL_MIXEDARRAYBITFIELDPACKET_HPP",
+            "fields": [
+                {
+                    "name": "flags",
+                    "type": "uint8_t",
+                    "bit_field": 4,
+                    "comment": "标志位"
+                },
+                {
+                    "name": "reserved",
+                    "type": "uint8_t",
+                    "bit_field": 4,
+                    "comment": "保留位"
+                },
+                {
+                    "name": "data",
+                    "type": "uint16_t[4]",
+                    "comment": "数据数组"
+                },
+                {
+                    "name": "checksum",
+                    "type": "uint32_t",
+                    "comment": "校验和"
+                }
+            ]
+        }"#;
+
+        let result = generate(json).unwrap();
+
+        assert!(result.contains("uint8_t flags : 4; ///< 标志位"));
+        assert!(result.contains("uint8_t reserved : 4; ///< 保留位"));
+        assert!(result.contains("uint16_t data[4]; ///< 数据数组"));
+        assert!(result.contains("uint32_t checksum; ///< 校验和"));
+    }
+
+    #[test]
+    fn test_generate_array_various_sizes() {
+        let json = r#"{
+            "packet_name": "VariousArraySizesPacket",
+            "command_id": "0x0404",
+            "namespace": null,
+            "packed": true,
+            "header_guard": "RPL_VARIOUSSIZESPACKET_HPP",
+            "fields": [
+                { "name": "single", "type": "float[1]", "comment": "单元素数组" },
+                { "name": "small", "type": "uint8_t[2]", "comment": "小数组" },
+                { "name": "medium", "type": "int16_t[16]", "comment": "中等数组" },
+                { "name": "large", "type": "double[64]", "comment": "大数组" }
+            ]
+        }"#;
+
+        let result = generate(json).unwrap();
+
+        assert!(result.contains("float single[1]; ///< 单元素数组"));
+        assert!(result.contains("uint8_t small[2]; ///< 小数组"));
+        assert!(result.contains("int16_t medium[16]; ///< 中等数组"));
+        assert!(result.contains("double large[64]; ///< 大数组"));
     }
 }
