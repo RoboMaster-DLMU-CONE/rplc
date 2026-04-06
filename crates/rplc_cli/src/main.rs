@@ -66,7 +66,8 @@ fn main() -> Result<()> {
             .unwrap();
 
         for (packet_name, cpp_output) in results {
-            let output_path = determine_output_path_for_packet(&args.input, &packet_name, args.output.as_ref());
+            let output_path =
+                determine_output_path_for_packet(&args.input, &packet_name, args.output.as_ref());
 
             if let Some(parent) = output_path.parent() {
                 fs::create_dir_all(parent)
@@ -114,7 +115,11 @@ fn determine_output_path(input: &PathBuf, output_dir: Option<&PathBuf>) -> PathB
     }
 }
 
-fn determine_output_path_for_packet(input: &PathBuf, packet_name: &str, output_dir: Option<&PathBuf>) -> PathBuf {
+fn determine_output_path_for_packet(
+    input: &PathBuf,
+    packet_name: &str,
+    output_dir: Option<&PathBuf>,
+) -> PathBuf {
     let new_filename = format!("{}.hpp", packet_name);
 
     match output_dir {

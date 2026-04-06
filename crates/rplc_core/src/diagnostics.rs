@@ -258,7 +258,8 @@ mod tests {
             "'field_name' 的位域限定符无效"
         );
         assert_eq!(
-            ValidationCode::BitFieldOnInvalidType("field_name".to_string(), "float".to_string()).to_string(),
+            ValidationCode::BitFieldOnInvalidType("field_name".to_string(), "float".to_string())
+                .to_string(),
             "字段 'field_name' 在不允许的变量类型: 'field_name' 上添加了位域限定符"
         );
         assert_eq!(
@@ -266,7 +267,14 @@ mod tests {
             "字段 'field_name' 的位域限定符长度: 10 超过了其类型本身的大小: 8"
         );
         assert_eq!(
-            ValidationCode::BitFieldStraddleBoundaryWithoutPacked("field1".to_string(), "field2".to_string(), 5, 6, 8).to_string(),
+            ValidationCode::BitFieldStraddleBoundaryWithoutPacked(
+                "field1".to_string(),
+                "field2".to_string(),
+                5,
+                6,
+                8
+            )
+            .to_string(),
             "位域字段 'field1' 和 'field2' 存在跨存储单元行为(5 + 6 > 8)，且内存布局非紧凑"
         );
 
@@ -347,7 +355,7 @@ mod tests {
             ValidationCode::InvalidArrayType("bad_field".to_string()).to_string(),
             "字段 'bad_field' 的数组格式无效"
         );
-        
+
         // Test BitFieldOnArray error message
         assert_eq!(
             ValidationCode::BitFieldOnArray("array_field".to_string()).to_string(),

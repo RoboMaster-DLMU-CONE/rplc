@@ -282,14 +282,12 @@ mod tests {
             packed: true,
             header_guard: Some("RPL_SENSORDATAPACKET_HPP".to_string()),
             comment: Some("传感器数据包".to_string()),
-            fields: vec![
-                Field {
-                    name: "sensor_id".to_string(),
-                    ty: "uint8_t".to_string(),
-                    bit_field: None,
-                    comment: Some("传感器ID".to_string()),
-                },
-            ],
+            fields: vec![Field {
+                name: "sensor_id".to_string(),
+                ty: "uint8_t".to_string(),
+                bit_field: None,
+                comment: Some("传感器ID".to_string()),
+            }],
         };
 
         let json = serde_json::to_string(&config).unwrap();

@@ -271,9 +271,9 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
                             // 解析数组类型
                             if let Some((base_type, arr_size)) = parse_array_type(ty_str) {
                                 // 验证基础类型是否有效
-                                let base_type_valid = c_type_to_bit_field_size(base_type).is_some() 
+                                let base_type_valid = c_type_to_bit_field_size(base_type).is_some()
                                     || matches!(base_type, "float" | "double" | "long double");
-                                
+
                                 if !base_type_valid {
                                     add_diag(
                                         Severity::Error,
@@ -281,7 +281,7 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
                                         ty_node,
                                     );
                                 }
-                                
+
                                 ty = Some(ty_str);
                                 if arr_size.is_some() {
                                     is_array_type = true;
@@ -322,7 +322,7 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
                         }
                         // Check if the bit_field value is explicitly null (meaning no bit field)
                         else if bit_field_node.is_null() {
-                            false  // No bit field
+                            false // No bit field
                         } else if let Some(bit_field_num) = bit_field_node.as_number() {
                             // 检查位域值是否为整数
                             if !bit_field_num.is_i64() {
@@ -350,7 +350,7 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
                                         } else {
                                             field_type
                                         };
-                                        
+
                                         let type_size = c_type_to_bit_field_size(type_to_check);
                                         if type_size.is_none() {
                                             add_diag(
@@ -1115,7 +1115,10 @@ mod tests {
         let diags = validate_multiple(json);
         assert!(!diags.is_empty()); // Should have diagnostics because of invalid command ID
 
-        let error_count = diags.iter().filter(|d| d.severity == Severity::Error).count();
+        let error_count = diags
+            .iter()
+            .filter(|d| d.severity == Severity::Error)
+            .count();
         assert_eq!(error_count, 1); // Should have 1 error for the invalid command ID
     }
 

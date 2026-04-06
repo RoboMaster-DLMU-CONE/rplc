@@ -308,31 +308,37 @@ struct RPL::Meta::PacketTraits<Robot::Navigation::RobotPosition> : PacketTraitsB
 };
 ```
 
-对于包含位域的配置，生成的C++代码如下：
+对于“位域跨字节”的配置，生成的C++代码如下（会自动生成 `BitLayout`）：
 
 ```cpp
 #ifndef RPL_SENSORSTATUS_HPP
 #define RPL_SENSORSTATUS_HPP
 
 #include <cstdint>
+#include <tuple>
+#include <RPL/Meta/BitstreamTraits.hpp>
 #include <RPL/Meta/PacketTraits.hpp>
 
-struct SensorStatus
+struct CrossByteTest
 {
-    uint8_t sensor_id : 4;      ///< 传感器ID
-    uint8_t status_flag : 3;    ///< 状态标志
-    uint8_t reserved : 1;       ///< 保留位
-    float temperature;          ///< 温度值
+    uint32_t val1 : 12;
+    uint32_t val2 : 12;
+    uint8_t val3 : 8;
 } __attribute__((packed));
 
 template <>
-struct RPL::Meta::PacketTraits<SensorStatus> : PacketTraitsBase<PacketTraits<SensorStatus>>
+struct RPL::Meta::PacketTraits<CrossByteTest> : PacketTraitsBase<PacketTraits<CrossByteTest>>
 {
-    static constexpr uint16_t cmd = 0x0301;
-    static constexpr size_t size = sizeof(SensorStatus);
+    static constexpr uint16_t cmd = 0x1002;
+    static constexpr size_t size = 4;
+    using BitLayout = std::tuple<
+        Field<uint32_t, 12>,
+        Field<uint32_t, 12>,
+        Field<uint8_t, 8>
+    >;
 };
 
-#endif //RPL_SENSORSTATUS_HPP
+#endif //RPL_CROSSBYTETEST_HPP
 ```
 
 对于包含数组字段的配置，生成的C++代码如下：
@@ -380,6 +386,7 @@ RPLC 支持在结构体中定义位域字段，允许更紧凑地存储数据。
 - `bit_field` 的值必须是正整数，且不能超过其基础数据类型的总位数
 - 位域只能用于整数类型（如 `uint8_t`, `int16_t`, `uint32_t` 等）
 - 位域字段不会影响结构体的整体大小验证，但会影响字段在结构体中的布局
+- 当检测到位域跨字节时，会自动在 `PacketTraits` 中生成 `BitLayout`，并将 `size` 设为位宽总和向上取整后的字节数
 
 ## 验证规则
 
@@ -441,4 +448,3 @@ RPLC 支持在结构体中定义位域字段，允许更紧凑地存储数据。
 
 - 规范版本：1.2
 - 兼容RPL版本：0.1+
-- 新增特性：数组类型字段支持（`float[3]`, `uint8_t[10]` 等）

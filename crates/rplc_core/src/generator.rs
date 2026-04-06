@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::diagnostics::Severity;
-use crate::validator::{parse_command_id, validate, parse_array_type};
+use crate::validator::{c_type_to_bit_field_size, parse_array_type, parse_command_id, validate};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -9,6 +9,60 @@ pub enum GenerateError {
     JsonError(#[from] serde_json::Error),
     #[error("配置验证未通过，请检查错误信息")]
     ValidationError,
+}
+
+#[derive(Debug, Clone)]
+struct BitLayoutField {
+    ty: String,
+    bits: u32,
+}
+
+#[derive(Debug, Clone)]
+struct BitLayoutPlan {
+    fields: Vec<BitLayoutField>,
+    total_bits: u32,
+}
+
+fn analyze_cross_byte_bit_layout(config: &Config) -> Option<BitLayoutPlan> {
+    let mut has_bit_field = false;
+    let mut has_cross_byte = false;
+    let mut total_bits: u32 = 0;
+    let mut fields = Vec::with_capacity(config.fields.len());
+
+    for field in &config.fields {
+        let (base_type, arr_size) = parse_array_type(&field.ty)?;
+        if arr_size.is_some() {
+            return None;
+        }
+
+        let base_bits = u32::from(c_type_to_bit_field_size(base_type)?) * 8;
+        let field_bits = if let Some(bit_width) = field.bit_field {
+            has_bit_field = true;
+            let width = u32::from(bit_width);
+            if (total_bits % 8) + width > 8 {
+                has_cross_byte = true;
+            }
+            width
+        } else {
+            base_bits
+        };
+
+        total_bits = total_bits.checked_add(field_bits)?;
+        fields.push(BitLayoutField {
+            ty: base_type.to_string(),
+            bits: field_bits,
+        });
+    }
+
+    if has_bit_field && has_cross_byte {
+        Some(BitLayoutPlan { fields, total_bits })
+    } else {
+        None
+    }
+}
+
+fn bytes_from_bits(bits: u32) -> u32 {
+    bits.div_ceil(8)
 }
 
 pub fn generate(json_input: &str) -> Result<String, GenerateError> {
@@ -24,6 +78,7 @@ pub fn generate(json_input: &str) -> Result<String, GenerateError> {
         .header_guard
         .clone()
         .unwrap_or_else(|| format!("RPL_{}_HPP", config.packet_name.to_uppercase()));
+    let bit_layout_plan = analyze_cross_byte_bit_layout(&config);
 
     let mut out = String::new();
     // Header Guard
@@ -32,6 +87,10 @@ pub fn generate(json_input: &str) -> Result<String, GenerateError> {
 
     // Includes
     out.push_str("#include <cstdint>\n");
+    if bit_layout_plan.is_some() {
+        out.push_str("#include <tuple>\n");
+        out.push_str("#include <RPL/Meta/BitstreamTraits.hpp>\n");
+    }
     out.push_str("#include <RPL/Meta/PacketTraits.hpp>\n\n");
 
     // Namespace
@@ -60,7 +119,7 @@ pub fn generate(json_input: &str) -> Result<String, GenerateError> {
             // 解析失败，使用原始类型
             out.push_str(&format!("    {} {}", field.ty, field.name));
         }
-        
+
         if let Some(bf) = field.bit_field {
             out.push_str(&format!(" : {};", bf));
         } else {
@@ -92,9 +151,28 @@ pub fn generate(json_input: &str) -> Result<String, GenerateError> {
         cmd_id
     ));
     out.push_str(&format!(
-        "    static constexpr size_t size = sizeof({});\n",
-        config.packet_name
+        "    static constexpr size_t size = {};\n",
+        bit_layout_plan
+            .as_ref()
+            .map(|plan| bytes_from_bits(plan.total_bits))
+            .map(|size| size.to_string())
+            .unwrap_or_else(|| format!("sizeof({})", config.packet_name))
     ));
+    if let Some(plan) = &bit_layout_plan {
+        out.push_str("    using BitLayout = std::tuple<\n");
+        for (idx, field) in plan.fields.iter().enumerate() {
+            let suffix = if idx + 1 == plan.fields.len() {
+                ""
+            } else {
+                ","
+            };
+            out.push_str(&format!(
+                "        Field<{}, {}>{}\n",
+                field.ty, field.bits, suffix
+            ));
+        }
+        out.push_str("    >;\n");
+    }
     out.push_str("};\n");
 
     // End Namespace
@@ -498,6 +576,81 @@ mod tests {
         assert!(!result.contains(" : 7; //"));
         assert!(!result.contains(" : 1; //"));
         assert!(result.contains("static constexpr uint16_t cmd = 0x0305;"));
+    }
+
+    #[test]
+    fn test_generate_cross_byte_bit_fields_with_bitlayout() {
+        let json = r#"{
+            "packet_name": "CrossByteTest",
+            "command_id": "0x1002",
+            "namespace": null,
+            "packed": true,
+            "header_guard": "RPL_CROSSBYTETEST_HPP",
+            "fields": [
+                {
+                    "name": "val1",
+                    "type": "uint32_t",
+                    "bit_field": 12,
+                    "comment": "takes 1.5 bytes"
+                },
+                {
+                    "name": "val2",
+                    "type": "uint32_t",
+                    "bit_field": 12,
+                    "comment": "takes 1.5 bytes"
+                },
+                {
+                    "name": "val3",
+                    "type": "uint8_t",
+                    "bit_field": 8,
+                    "comment": "takes 1 byte"
+                }
+            ]
+        }"#;
+
+        let result = generate(json).unwrap();
+
+        assert!(result.contains("#include <tuple>"));
+        assert!(result.contains("#include <RPL/Meta/BitstreamTraits.hpp>"));
+        assert!(result.contains("static constexpr size_t size = 4;"));
+        assert!(result.contains("using BitLayout = std::tuple<"));
+        assert!(result.contains("Field<uint32_t, 12>,"));
+        assert!(result.contains("Field<uint32_t, 12>,"));
+        assert!(result.contains("Field<uint8_t, 8>"));
+    }
+
+    #[test]
+    fn test_generate_non_cross_byte_bit_fields_without_bitlayout() {
+        let json = r#"{
+            "packet_name": "AlignedBitFields",
+            "command_id": "0x1003",
+            "namespace": null,
+            "packed": true,
+            "header_guard": "RPL_ALIGNEDBITFIELDS_HPP",
+            "fields": [
+                {
+                    "name": "a",
+                    "type": "uint8_t",
+                    "bit_field": 4
+                },
+                {
+                    "name": "b",
+                    "type": "uint8_t",
+                    "bit_field": 4
+                },
+                {
+                    "name": "c",
+                    "type": "uint8_t",
+                    "bit_field": 8
+                }
+            ]
+        }"#;
+
+        let result = generate(json).unwrap();
+
+        assert!(!result.contains("#include <tuple>"));
+        assert!(!result.contains("using BitLayout = std::tuple<"));
+        assert!(result.contains("static constexpr size_t size = sizeof(AlignedBitFields);"));
     }
 
     #[test]
