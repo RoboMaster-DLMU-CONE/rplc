@@ -15,6 +15,8 @@ pub enum GenerateError {
 struct BitLayoutField {
     ty: String,
     bits: u32,
+    is_array: bool,
+    array_size: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -23,38 +25,49 @@ struct BitLayoutPlan {
     total_bits: u32,
 }
 
-fn analyze_cross_byte_bit_layout(config: &Config) -> Option<BitLayoutPlan> {
+/// 分析位域并生成 BitLayout 计划
+/// 只要结构体中包含任何位域，就会生成 BitLayout
+fn analyze_bit_layout(config: &Config) -> Option<BitLayoutPlan> {
     let mut has_bit_field = false;
-    let mut has_cross_byte = false;
     let mut total_bits: u32 = 0;
     let mut fields = Vec::with_capacity(config.fields.len());
 
     for field in &config.fields {
-        let (base_type, arr_size) = parse_array_type(&field.ty)?;
-        if arr_size.is_some() {
-            return None;
-        }
+        let parsed_type = parse_array_type(&field.ty);
+
+        // 如果无法解析类型，跳过
+        let (base_type, arr_size) = match parsed_type {
+            Some((base, arr)) => (base, arr),
+            None => return None,
+        };
 
         let base_bits = u32::from(c_type_to_bit_field_size(base_type)?) * 8;
-        let field_bits = if let Some(bit_width) = field.bit_field {
+
+        let (field_bits, is_array, array_size) = if let Some(arr_size) = arr_size {
+            // 数组字段
+            let arr_size = arr_size as u32;
+            let field_bits = base_bits * arr_size;
+            (field_bits, true, Some(arr_size))
+        } else if let Some(bit_width) = field.bit_field {
+            // 位域字段
             has_bit_field = true;
-            let width = u32::from(bit_width);
-            if (total_bits % 8) + width > 8 {
-                has_cross_byte = true;
-            }
-            width
+            (u32::from(bit_width), false, None)
         } else {
-            base_bits
+            // 普通字段
+            (base_bits, false, None)
         };
 
         total_bits = total_bits.checked_add(field_bits)?;
         fields.push(BitLayoutField {
             ty: base_type.to_string(),
             bits: field_bits,
+            is_array,
+            array_size,
         });
     }
 
-    if has_bit_field && has_cross_byte {
+    // 只要有任何位域字段，就生成 BitLayout
+    if has_bit_field {
         Some(BitLayoutPlan { fields, total_bits })
     } else {
         None
@@ -78,7 +91,7 @@ pub fn generate(json_input: &str) -> Result<String, GenerateError> {
         .header_guard
         .clone()
         .unwrap_or_else(|| format!("RPL_{}_H", config.packet_name.to_uppercase()));
-    let bit_layout_plan = analyze_cross_byte_bit_layout(&config);
+    let bit_layout_plan = analyze_bit_layout(&config);
 
     let mut out = String::new();
     // Header Guard
@@ -89,6 +102,7 @@ pub fn generate(json_input: &str) -> Result<String, GenerateError> {
     out.push_str("#ifdef __cplusplus\n");
     out.push_str("#include <cstdint>\n");
     if bit_layout_plan.is_some() {
+        out.push_str("#include <array>\n");
         out.push_str("#include <tuple>\n");
         out.push_str("#include <RPL/Meta/BitstreamTraits.hpp>\n");
     }
@@ -171,10 +185,31 @@ pub fn generate(json_input: &str) -> Result<String, GenerateError> {
             } else {
                 ","
             };
-            out.push_str(&format!(
-                "        Field<{}, {}>{}\n",
-                field.ty, field.bits, suffix
-            ));
+
+            // 根据是否为数组字段生成不同的格式
+            if field.is_array {
+                if let Some(arr_size) = field.array_size {
+                    // 数组字段：Field<std::array<元素类型, 元素个数>, 总位数>
+                    out.push_str(&format!(
+                        "        Field<std::array<{}>, {}>{}\n",
+                        format!("{}, {}", field.ty, arr_size),
+                        field.bits,
+                        suffix
+                    ));
+                } else {
+                    // 理论上不应该到这里
+                    out.push_str(&format!(
+                        "        Field<{}, {}>{}\n",
+                        field.ty, field.bits, suffix
+                    ));
+                }
+            } else {
+                // 非数组字段：Field<类型, 位数>
+                out.push_str(&format!(
+                    "        Field<{}, {}>{}\n",
+                    field.ty, field.bits, suffix
+                ));
+            }
         }
         out.push_str("    >;\n");
     }
@@ -626,7 +661,7 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_non_cross_byte_bit_fields_without_bitlayout() {
+    fn test_generate_non_cross_byte_bit_fields_with_bitlayout() {
         let json = r#"{
             "packet_name": "AlignedBitFields",
             "command_id": "0x1003",
@@ -654,9 +689,14 @@ mod tests {
 
         let result = generate(json).unwrap();
 
-        assert!(!result.contains("#include <tuple>"));
-        assert!(!result.contains("using BitLayout = std::tuple<"));
-        assert!(result.contains("static constexpr size_t size = sizeof(AlignedBitFields);"));
+        // 现在只要包含位域就会生成 BitLayout
+        assert!(result.contains("#include <tuple>"));
+        assert!(result.contains("using BitLayout = std::tuple<"));
+        assert!(result.contains("Field<uint8_t, 4>,"));
+        assert!(result.contains("Field<uint8_t, 4>,"));
+        assert!(result.contains("Field<uint8_t, 8>"));
+        // size 应该使用 bit 计算的字节数
+        assert!(result.contains("static constexpr size_t size = 2;")); // 4+4+8 = 16 bits = 2 bytes
     }
 
     #[test]
@@ -956,5 +996,54 @@ mod tests {
         assert!(result.contains("uint8_t status : 4;"));
         assert!(result.contains("uint8_t flag : 4;"));
         assert!(result.contains("float value;"));
+    }
+
+    #[test]
+    fn test_generate_bitlayout_with_array_fields() {
+        let json = r#"{
+            "packet_name": "InteractionFigure",
+            "command_id": "0x0401",
+            "namespace": null,
+            "packed": true,
+            "header_guard": "RPL_INTERACTIONFIGURE_H",
+            "fields": [
+                {
+                    "name": "figure_name",
+                    "type": "uint8_t[3]",
+                    "comment": "图形名称"
+                },
+                {
+                    "name": "operate_type",
+                    "type": "uint32_t",
+                    "bit_field": 3,
+                    "comment": "操作类型"
+                },
+                {
+                    "name": "figure_id",
+                    "type": "uint8_t",
+                    "comment": "图形ID"
+                }
+            ]
+        }"#;
+
+        let result = generate(json).unwrap();
+
+        // 检查包含 std::array
+        assert!(result.contains("#include <array>"));
+
+        // 检查 BitLayout 生成
+        assert!(result.contains("using BitLayout = std::tuple<"));
+
+        // 检查数组字段的 Field<std::array<T, N>, bits> 格式
+        assert!(result.contains("Field<std::array<uint8_t, 3>, 24>"));
+
+        // 检查位域字段
+        assert!(result.contains("Field<uint32_t, 3>"));
+
+        // 检查普通字段
+        assert!(result.contains("Field<uint8_t, 8>"));
+
+        // 检查 size 计算：24 + 3 + 8 = 35 bits，向上取整为 5 bytes
+        assert!(result.contains("static constexpr size_t size = 5;"));
     }
 }

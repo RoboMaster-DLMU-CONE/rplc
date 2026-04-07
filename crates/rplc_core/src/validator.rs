@@ -311,18 +311,19 @@ pub fn validate(json_input: &str) -> Vec<RplcDiagnostic> {
 
                     // Bit-Field - 数组类型不允许使用位域
                     let has_bit_field = if let Some(bit_field_node) = field_map.get("bit_field") {
+                        // Check if the bit_field value is explicitly null (meaning no bit field)
+                        // 这个检查必须在最前面，因为 serde 重新序列化时会将 None 转为 null
+                        if bit_field_node.is_null() {
+                            false // No bit field
+                        }
                         // 检查是否为数组类型
-                        if is_array_type {
+                        else if is_array_type {
                             add_diag(
                                 Severity::Error,
                                 ValidationCode::BitFieldOnArray(field_name.clone()),
                                 bit_field_node,
                             );
                             false
-                        }
-                        // Check if the bit_field value is explicitly null (meaning no bit field)
-                        else if bit_field_node.is_null() {
-                            false // No bit field
                         } else if let Some(bit_field_num) = bit_field_node.as_number() {
                             // 检查位域值是否为整数
                             if !bit_field_num.is_i64() {
