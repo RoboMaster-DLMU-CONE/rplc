@@ -107,7 +107,7 @@ fn main() -> Result<()> {
 
 fn determine_output_path(input: &PathBuf, output_dir: Option<&PathBuf>) -> PathBuf {
     let file_stem = input.file_stem().unwrap_or_default();
-    let new_filename = format!("{}.hpp", file_stem.to_string_lossy());
+    let new_filename = format!("{}.h", file_stem.to_string_lossy());
 
     match output_dir {
         Some(dir) => dir.join(new_filename),
@@ -120,7 +120,7 @@ fn determine_output_path_for_packet(
     packet_name: &str,
     output_dir: Option<&PathBuf>,
 ) -> PathBuf {
-    let new_filename = format!("{}.hpp", packet_name);
+    let new_filename = format!("{}.h", packet_name);
 
     match output_dir {
         Some(dir) => dir.join(new_filename),
