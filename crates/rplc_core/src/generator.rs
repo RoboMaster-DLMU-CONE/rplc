@@ -90,7 +90,7 @@ pub fn generate(json_input: &str) -> Result<String, GenerateError> {
     let guard = config
         .header_guard
         .clone()
-        .unwrap_or_else(|| format!("RPL_{}_H", config.packet_name.to_uppercase()));
+        .unwrap_or_else(|| format!("RPL_{}_HPP", config.packet_name.to_uppercase()));
     let bit_layout_plan = analyze_bit_layout(&config);
 
     let mut out = String::new();
@@ -98,18 +98,14 @@ pub fn generate(json_input: &str) -> Result<String, GenerateError> {
     out.push_str(&format!("#ifndef {}\n", guard));
     out.push_str(&format!("#define {}\n\n", guard));
 
-    // C/C++ compatibility
-    out.push_str("#ifdef __cplusplus\n");
+    // Includes
     out.push_str("#include <cstdint>\n");
+    out.push_str("#include <array>\n");
     if bit_layout_plan.is_some() {
-        out.push_str("#include <array>\n");
         out.push_str("#include <tuple>\n");
         out.push_str("#include <RPL/Meta/BitstreamTraits.hpp>\n");
     }
-    out.push_str("#include <RPL/Meta/PacketTraits.hpp>\n");
-    out.push_str("#else\n");
-    out.push_str("#include <stdint.h>\n");
-    out.push_str("#endif // __cplusplus\n\n");
+    out.push_str("#include <RPL/Meta/PacketTraits.hpp>\n\n");
 
     // Namespace
     if let Some(ns) = &config.namespace {
@@ -127,26 +123,38 @@ pub fn generate(json_input: &str) -> Result<String, GenerateError> {
         // 解析数组类型
         if let Some((base_type, arr_size)) = parse_array_type(&field.ty) {
             if let Some(size) = arr_size {
-                // 数组类型: type name[size];
-                out.push_str(&format!("    {} {}[{}]", base_type, field.name, size));
+                // 数组类型: std::array<type, size> name;
+                out.push_str(&format!("    std::array<{}, {}> {};", base_type, size, field.name));
+                if let Some(cmt) = &field.comment {
+                    out.push_str(&format!(" ///< {}", cmt));
+                }
+                out.push('\n');
             } else {
                 // 非数组类型: type name;
                 out.push_str(&format!("    {} {}", field.ty, field.name));
+                if let Some(bf) = field.bit_field {
+                    out.push_str(&format!(" : {};", bf));
+                } else {
+                    out.push(';');
+                }
+                if let Some(cmt) = &field.comment {
+                    out.push_str(&format!(" ///< {}", cmt));
+                }
+                out.push('\n');
             }
         } else {
             // 解析失败，使用原始类型
             out.push_str(&format!("    {} {}", field.ty, field.name));
+            if let Some(bf) = field.bit_field {
+                out.push_str(&format!(" : {};", bf));
+            } else {
+                out.push(';');
+            }
+            if let Some(cmt) = &field.comment {
+                out.push_str(&format!(" ///< {}", cmt));
+            }
+            out.push('\n');
         }
-
-        if let Some(bf) = field.bit_field {
-            out.push_str(&format!(" : {};", bf));
-        } else {
-            out.push(';');
-        }
-        if let Some(cmt) = &field.comment {
-            out.push_str(&format!(" ///< {}", cmt));
-        }
-        out.push('\n');
     }
 
     let packed = if config.packed {
@@ -157,8 +165,7 @@ pub fn generate(json_input: &str) -> Result<String, GenerateError> {
 
     out.push_str(&format!("}} {};\n\n", packed));
 
-    // Traits (C++ only)
-    out.push_str("#ifdef __cplusplus\n");
+    // Traits
     out.push_str("template <>\n");
     out.push_str(&format!(
         "struct RPL::Meta::PacketTraits<{}> : PacketTraitsBase<PacketTraits<{}>>\n",
@@ -214,7 +221,6 @@ pub fn generate(json_input: &str) -> Result<String, GenerateError> {
         out.push_str("    >;\n");
     }
     out.push_str("};\n");
-    out.push_str("#endif // __cplusplus\n");
 
     // End Namespace
     if let Some(ns) = &config.namespace {
@@ -282,7 +288,7 @@ mod tests {
             "command_id": "0x0104",
             "namespace": null,
             "packed": true,
-            "header_guard": "RPL_BASICPACKET_H",
+            "header_guard": "RPL_BASICPACKET_HPP",
             "fields": [
                 {
                     "name": "field1",
@@ -299,15 +305,15 @@ mod tests {
 
         let result = generate(json).unwrap();
 
-        assert!(result.contains("#ifndef RPL_BASICPACKET_H"));
-        assert!(result.contains("#define RPL_BASICPACKET_H"));
+        assert!(result.contains("#ifndef RPL_BASICPACKET_HPP"));
+        assert!(result.contains("#define RPL_BASICPACKET_HPP"));
         assert!(result.contains("struct BasicPacket"));
         assert!(result.contains("} __attribute__((packed));"));
         assert!(result.contains("uint8_t field1; ///< First field"));
         assert!(result.contains("float field2; ///< Second field"));
         assert!(result.contains("static constexpr uint16_t cmd = 0x0104;"));
         assert!(result.contains("static constexpr size_t size = sizeof(BasicPacket)"));
-        assert!(result.contains("#endif // RPL_BASICPACKET_H"));
+        assert!(result.contains("#endif // RPL_BASICPACKET_HPP"));
     }
 
     #[test]
@@ -317,7 +323,7 @@ mod tests {
             "command_id": "0xABCD",
             "namespace": "Robot::Sensors",
             "packed": true,
-            "header_guard": "RPL_NAMESPACEPACKET_H",
+            "header_guard": "RPL_NAMESPACEPACKET_HPP",
             "fields": [
                 {
                     "name": "sensor_id",
@@ -360,7 +366,7 @@ mod tests {
         assert!(!result.contains("__attribute__((packed))"));
         assert!(result.contains("struct UnpackedPacket"));
         assert!(result.contains("int32_t data; ///< Some data"));
-        assert!(result.contains("#ifndef RPL_UNPACKEDPACKET_H")); // Generated header guard
+        assert!(result.contains("#ifndef RPL_UNPACKEDPACKET_HPP")); // Generated header guard
     }
 
     #[test]
@@ -383,8 +389,8 @@ mod tests {
         let result = generate(json).unwrap();
 
         // Should generate default header guard based on packet name
-        assert!(result.contains("#ifndef RPL_DEFAULTGUARDPACKET_H"));
-        assert!(result.contains("#define RPL_DEFAULTGUARDPACKET_H"));
+        assert!(result.contains("#ifndef RPL_DEFAULTGUARDPACKET_HPP"));
+        assert!(result.contains("#define RPL_DEFAULTGUARDPACKET_HPP"));
         assert!(result.contains("double value; ///< A double value"));
     }
 
@@ -395,7 +401,7 @@ mod tests {
             "command_id": "0x0101",
             "namespace": null,
             "packed": true,
-            "header_guard": "RPL_NOCOMMENTPACKET_H",
+            "header_guard": "RPL_NOCOMMENTPACKET_HPP",
             "fields": [
                 {
                     "name": "no_comment_field",
@@ -407,7 +413,7 @@ mod tests {
 
         let result = generate(json).unwrap();
 
-        assert!(result.contains("#ifndef RPL_NOCOMMENTPACKET_H"));
+        assert!(result.contains("#ifndef RPL_NOCOMMENTPACKET_HPP"));
         assert!(result.contains("uint32_t no_comment_field;")); // No comment present
         // The trait comment lines will still be present, just not field comments
         // Let's check specifically for field comments
@@ -421,7 +427,7 @@ mod tests {
             "command_id": "invalid-command-id",
             "namespace": null,
             "packed": true,
-            "header_guard": "RPL_VALIDPACKET_H",
+            "header_guard": "RPL_VALIDPACKET_HPP",
             "fields": [
                 {
                     "name": "valid_field",
@@ -447,7 +453,7 @@ mod tests {
             "command_id": "0x0104",
             "namespace": null,
             "packed": true,
-            "header_guard": "RPL_INVALIDJSONPACKET_H",
+            "header_guard": "RPL_INVALIDJSONPACKET_HPP",
             "fields": [
                 {
                     "name": "field",
@@ -471,7 +477,7 @@ mod tests {
             "command_id": "invalid-command-id",
             "namespace": null,
             "packed": true,
-            "header_guard": "RPL_VALIDPACKET_H",
+            "header_guard": "RPL_VALIDPACKET_HPP",
             "fields": [
                 {
                     "name": "field",
@@ -497,7 +503,7 @@ mod tests {
             "command_id": "0x0105",
             "namespace": null,
             "packed": true,
-            "header_guard": "RPL_BITFIELDPACKET_H",
+            "header_guard": "RPL_BITFIELDPACKET_HPP",
             "fields": [
                 {
                     "name": "status",
@@ -527,7 +533,7 @@ mod tests {
 
         let result = generate(json).unwrap();
 
-        assert!(result.contains("#ifndef RPL_BITFIELDPACKET_H"));
+        assert!(result.contains("#ifndef RPL_BITFIELDPACKET_HPP"));
         assert!(result.contains("struct BitFieldPacket"));
         assert!(result.contains("} __attribute__((packed))"));
         assert!(result.contains("uint8_t status : 4; ///< Status field"));
@@ -544,7 +550,7 @@ mod tests {
             "command_id": "0x0205",
             "namespace": "Robot::Controls",
             "packed": false,
-            "header_guard": "RPL_MIXEDFIELDSPACKET_H",
+            "header_guard": "RPL_MIXEDFIELDSPACKET_HPP",
             "fields": [
                 {
                     "name": "cmd_type",
@@ -584,7 +590,7 @@ mod tests {
             "command_id": "0x0305",
             "namespace": null,
             "packed": true,
-            "header_guard": "RPL_BITFIELDSNOCOMMENTS_H",
+            "header_guard": "RPL_BITFIELDSNOCOMMENTS_HPP",
             "fields": [
                 {
                     "name": "field1",
@@ -606,7 +612,7 @@ mod tests {
 
         let result = generate(json).unwrap();
 
-        assert!(result.contains("#ifndef RPL_BITFIELDSNOCOMMENTS_H"));
+        assert!(result.contains("#ifndef RPL_BITFIELDSNOCOMMENTS_HPP"));
         assert!(result.contains("struct BitFieldsNoComments"));
         assert!(result.contains("} __attribute__((packed))"));
         assert!(result.contains("uint16_t field1 : 8;"));
@@ -626,7 +632,7 @@ mod tests {
             "command_id": "0x1002",
             "namespace": null,
             "packed": true,
-            "header_guard": "RPL_CROSSBYTETEST_H",
+            "header_guard": "RPL_CROSSBYTETEST_HPP",
             "fields": [
                 {
                     "name": "val1",
@@ -667,7 +673,7 @@ mod tests {
             "command_id": "0x1003",
             "namespace": null,
             "packed": true,
-            "header_guard": "RPL_ALIGNEDBITFIELDS_H",
+            "header_guard": "RPL_ALIGNEDBITFIELDS_HPP",
             "fields": [
                 {
                     "name": "a",
@@ -707,7 +713,7 @@ mod tests {
                 "command_id": "0x0101",
                 "namespace": null,
                 "packed": true,
-                "header_guard": "RPL_PACKETA_H",
+                "header_guard": "RPL_PACKETA_HPP",
                 "fields": [
                     {
                         "name": "field_a",
@@ -721,7 +727,7 @@ mod tests {
                 "command_id": "0x0102",
                 "namespace": "Test::Ns",
                 "packed": false,
-                "header_guard": "RPL_PACKETB_H",
+                "header_guard": "RPL_PACKETB_HPP",
                 "fields": [
                     {
                         "name": "field_b",
@@ -738,7 +744,7 @@ mod tests {
         // Check first packet
         let (name_a, output_a) = &results[0];
         assert_eq!(name_a, "PacketA");
-        assert!(output_a.contains("#ifndef RPL_PACKETA_H"));
+        assert!(output_a.contains("#ifndef RPL_PACKETA_HPP"));
         assert!(output_a.contains("struct PacketA"));
         assert!(output_a.contains("} __attribute__((packed))"));
         assert!(output_a.contains("uint8_t field_a; ///< Field A"));
@@ -746,7 +752,7 @@ mod tests {
         // Check second packet
         let (name_b, output_b) = &results[1];
         assert_eq!(name_b, "PacketB");
-        assert!(output_b.contains("#ifndef RPL_PACKETB_H"));
+        assert!(output_b.contains("#ifndef RPL_PACKETB_HPP"));
         assert!(output_b.contains("namespace Test::Ns {"));
         assert!(!output_b.contains("__attribute__((packed))")); // packed is false
         assert!(output_b.contains("uint16_t field_b; ///< Field B"));
@@ -760,7 +766,7 @@ mod tests {
                 "command_id": "0x0103",
                 "namespace": null,
                 "packed": true,
-                "header_guard": "RPL_BITFIELDSPACKET_H",
+                "header_guard": "RPL_BITFIELDSPACKET_HPP",
                 "fields": [
                     {
                         "name": "status",
@@ -783,7 +789,7 @@ mod tests {
 
         let (name, output) = &results[0];
         assert_eq!(name, "BitFieldsPacket");
-        assert!(output.contains("#ifndef RPL_BITFIELDSPACKET_H"));
+        assert!(output.contains("#ifndef RPL_BITFIELDSPACKET_HPP"));
         assert!(output.contains("struct BitFieldsPacket"));
         assert!(output.contains("} __attribute__((packed))"));
         assert!(output.contains("uint8_t status : 4; ///< Status field"));
@@ -798,7 +804,7 @@ mod tests {
             "command_id": "0x0104",
             "namespace": null,
             "packed": true,
-            "header_guard": "RPL_SINGLEPACKET_H",
+            "header_guard": "RPL_SINGLEPACKET_HPP",
             "fields": [
                 {
                     "name": "field",
@@ -813,7 +819,7 @@ mod tests {
 
         let (name, output) = &results[0];
         assert_eq!(name, "SinglePacket");
-        assert!(output.contains("#ifndef RPL_SINGLEPACKET_H"));
+        assert!(output.contains("#ifndef RPL_SINGLEPACKET_HPP"));
         assert!(output.contains("struct SinglePacket"));
         assert!(output.contains("} __attribute__((packed))"));
         assert!(output.contains("uint8_t field; ///< A field"));
@@ -828,7 +834,7 @@ mod tests {
             "command_id": "0x0104",
             "namespace": null,
             "packed": true,
-            "header_guard": "RPL_ARRAYPACKET_H",
+            "header_guard": "RPL_ARRAYPACKET_HPP",
             "fields": [
                 {
                     "name": "temperature",
@@ -850,8 +856,8 @@ mod tests {
 
         let result = generate(json).unwrap();
 
-        assert!(result.contains("float temperature[3]; ///< 温度值(摄氏度)"));
-        assert!(result.contains("uint8_t data[8]; ///< 数据数组"));
+        assert!(result.contains("std::array<float, 3> temperature; ///< 温度值(摄氏度)"));
+        assert!(result.contains("std::array<uint8_t, 8> data; ///< 数据数组"));
         assert!(result.contains("uint16_t single_field; ///< 单值字段"));
         assert!(result.contains("struct ArrayPacket"));
     }
@@ -863,7 +869,7 @@ mod tests {
             "command_id": "0x0204",
             "namespace": "Robot::Sensors",
             "packed": true,
-            "header_guard": "RPL_NAMESPACEARRAYPACKET_H",
+            "header_guard": "RPL_NAMESPACEARRAYPACKET_HPP",
             "fields": [
                 {
                     "name": "sensor_data",
@@ -876,7 +882,7 @@ mod tests {
         let result = generate(json).unwrap();
 
         assert!(result.contains("namespace Robot::Sensors {"));
-        assert!(result.contains("int32_t sensor_data[4]; ///< 传感器数据数组"));
+        assert!(result.contains("std::array<int32_t, 4> sensor_data; ///< 传感器数据数组"));
         assert!(result.contains("// namespace Robot::Sensors"));
         assert!(result.contains("struct NamespaceArrayPacket"));
     }
@@ -888,7 +894,7 @@ mod tests {
             "command_id": "0x0304",
             "namespace": null,
             "packed": true,
-            "header_guard": "RPL_MIXEDARRAYBITFIELDPACKET_H",
+            "header_guard": "RPL_MIXEDARRAYBITFIELDPACKET_HPP",
             "fields": [
                 {
                     "name": "flags",
@@ -919,7 +925,7 @@ mod tests {
 
         assert!(result.contains("uint8_t flags : 4; ///< 标志位"));
         assert!(result.contains("uint8_t reserved : 4; ///< 保留位"));
-        assert!(result.contains("uint16_t data[4]; ///< 数据数组"));
+        assert!(result.contains("std::array<uint16_t, 4> data; ///< 数据数组"));
         assert!(result.contains("uint32_t checksum; ///< 校验和"));
     }
 
@@ -930,7 +936,7 @@ mod tests {
             "command_id": "0x0404",
             "namespace": null,
             "packed": true,
-            "header_guard": "RPL_VARIOUSSIZESPACKET_H",
+            "header_guard": "RPL_VARIOUSSIZESPACKET_HPP",
             "fields": [
                 { "name": "single", "type": "float[1]", "comment": "单元素数组" },
                 { "name": "small", "type": "uint8_t[2]", "comment": "小数组" },
@@ -941,10 +947,10 @@ mod tests {
 
         let result = generate(json).unwrap();
 
-        assert!(result.contains("float single[1]; ///< 单元素数组"));
-        assert!(result.contains("uint8_t small[2]; ///< 小数组"));
-        assert!(result.contains("int16_t medium[16]; ///< 中等数组"));
-        assert!(result.contains("double large[64]; ///< 大数组"));
+        assert!(result.contains("std::array<float, 1> single; ///< 单元素数组"));
+        assert!(result.contains("std::array<uint8_t, 2> small; ///< 小数组"));
+        assert!(result.contains("std::array<int16_t, 16> medium; ///< 中等数组"));
+        assert!(result.contains("std::array<double, 64> large; ///< 大数组"));
     }
 
     #[test]
@@ -954,7 +960,7 @@ mod tests {
             "command_id": "0x0504",
             "namespace": null,
             "packed": true,
-            "header_guard": "RPL_CCOMPATIBLEPACKET_H",
+            "header_guard": "RPL_CCOMPATIBLEPACKET_HPP",
             "fields": [
                 {
                     "name": "status",
@@ -978,20 +984,18 @@ mod tests {
 
         let result = generate(json).unwrap();
 
-        // 检查 C/C++ 兼容性保护
-        assert!(result.contains("#ifdef __cplusplus"));
+        // 检查包含正确的头文件
         assert!(result.contains("#include <cstdint>"));
-        assert!(result.contains("#else"));
-        assert!(result.contains("#include <stdint.h>"));
-        assert!(result.contains("#endif // __cplusplus"));
+        assert!(!result.contains("#include <stdint.h>"));
+        assert!(!result.contains("#ifdef __cplusplus"));
+        assert!(!result.contains("#else"));
+        assert!(!result.contains("#endif // __cplusplus"));
 
-        // 检查 PacketTraits 仅在 C++ 模式下
-        assert!(result.contains("#ifdef __cplusplus"));
+        // 检查 PacketTraits 生成
         assert!(result.contains("template <>"));
         assert!(result.contains("struct RPL::Meta::PacketTraits<CCompatiblePacket>"));
-        assert!(result.contains("#endif // __cplusplus"));
 
-        // 检查基本结构体在 C 和 C++ 中都能使用
+        // 检查基本结构体
         assert!(result.contains("struct CCompatiblePacket"));
         assert!(result.contains("uint8_t status : 4;"));
         assert!(result.contains("uint8_t flag : 4;"));
@@ -1005,7 +1009,7 @@ mod tests {
             "command_id": "0x0401",
             "namespace": null,
             "packed": true,
-            "header_guard": "RPL_INTERACTIONFIGURE_H",
+            "header_guard": "RPL_INTERACTIONFIGURE_HPP",
             "fields": [
                 {
                     "name": "figure_name",
@@ -1028,21 +1032,21 @@ mod tests {
 
         let result = generate(json).unwrap();
 
-        // 检查包含 std::array
-        assert!(result.contains("#include <array>"));
-
+        // 检查 std::array 格式的结构体字段
+        assert!(result.contains("std::array<uint8_t, 3> figure_name; ///< 图形名称"));
+        
         // 检查 BitLayout 生成
         assert!(result.contains("using BitLayout = std::tuple<"));
-
+        
         // 检查数组字段的 Field<std::array<T, N>, bits> 格式
         assert!(result.contains("Field<std::array<uint8_t, 3>, 24>"));
-
+        
         // 检查位域字段
         assert!(result.contains("Field<uint32_t, 3>"));
-
+        
         // 检查普通字段
         assert!(result.contains("Field<uint8_t, 8>"));
-
+        
         // 检查 size 计算：24 + 3 + 8 = 35 bits，向上取整为 5 bytes
         assert!(result.contains("static constexpr size_t size = 5;"));
     }
